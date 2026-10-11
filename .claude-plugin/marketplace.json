@@ -1,0 +1,15 @@
+{
+  "name": "sajadh92",
+  "owner": {
+    "name": "Sajadh92"
+  },
+  "description": "Sajadh92's Claude Code plugins.",
+  "plugins": [
+    {
+      "name": "abofles",
+      "source": "./plugins/abofles",
+      "description": "Abo Fles (ابو فليس) counts every token: routes each subagent to the right model and effort.",
+      "version": "1.0.0"
+    }
+  ]
+}

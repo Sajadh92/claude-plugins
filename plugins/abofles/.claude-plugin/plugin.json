@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "abofles",
+  "version": "1.0.0",
+  "description": "Abo Fles (ابو فليس) — the stingy one who counts every token. Routes every subagent to the right model (haiku/sonnet/opus/fable) and effort (low..max) from a topic x side matrix, and suggests the main session model.",
+  "author": {
+    "name": "Sajadh92"
+  },
+  "keywords": [
+    "subagents",
+    "model-routing",
+    "effort",
+    "token-saving",
+    "abofles"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/Sajadh92/claude-plugins",
+  "repository": "https://github.com/Sajadh92/claude-plugins"
+}
