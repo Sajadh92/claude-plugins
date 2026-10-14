@@ -2,6 +2,15 @@
 
 All notable changes to the plugins in this marketplace.
 
+## abofles 1.2.0 · abofles-guide 0.2.0 — 2026-10-14
+
+- abofles: `SKILL.md` cut from 43 KB to 12 KB (about 8K fewer tokens per load); topic index, overrides, question gate, memo/guide, spawn details and the worked example moved to `references/*.md`, read on demand. `gen_matrix.py` writes the index to `references/topics.md`; `--check` added.
+- abofles: injected hook texts about 30% shorter (receipt, guard, context watch, question and agent gates, resume preamble); a background launch no longer repeats the receipt instruction (the Stop hook asks for it when the chain ends).
+- abofles: the stored guide carries an action per item (`fill` for the band's Use button, `resolve` argv), the context size against the next mark, the open task's spawns/cost/budget and the `main:` suggestion. `status.py --resolve <id> --session <sid>`.
+- abofles: `status.py --resolve` and `memo.py resolve` exit 1 when nothing was resolved; the band's Resolve runs them with the hook's own Python; the question-gate text no longer claims a transcript check that does not exist; skill and `/abofles:route` quote the hook's current effort and `main:` lines.
+- abofles: a reader's cited paths also resolve from absolute folders the spawn prompt names (a worktree outside the session's project root was falsely downgraded to `low` in the live test); the 🟡 escalate prompt names the agent; resolving an already-resolved row says so.
+- abofles-guide: band hidden when nothing is open; Use fills the exact action for the top item; Resolve button settles a stale FAIL or a decided owner item in one click; Memo button near a context mark; the 🔴 toast fires again (its check cut the emoji in half); dim meter line (`ctx 412K / 500K · task 3 spawns · $0.41 · budget 2 left · suggest …`).
+
 ## abofles 1.1.0 · abofles-guide 0.1.0 — 2026-10-14
 
 - Receipt: header computed by the hook from each subagent's transcript — `🧾 **N Spawns · T Tokens · $C · Saved P% ($S)** vs <main Model>` — then `done / why / check / open` as inline-code tags; `Receipt = full | short | savings N | off`. Usage deduplicated by message id; `/abofles:bill` and `/abofles:status` print the real spend.

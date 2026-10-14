@@ -1,0 +1,25 @@
+# Question gate
+
+Read before any `AskUserQuestion` other than the agent gate.
+
+A `PreToolUse` hook denies every `AskUserQuestion` (except the agent gate) until a Judge has seen it. Reason: the user answers most questions with the recommended option without understanding them, and pays later in rework. Two sides, routed by the **tier of the decision** (money, auth, data = T4; a production rule = T3; the rest T1–T2):
+
+| Tier | Judge (`abofles:abofles-judge`, header side `Judge`) | Explainer (`abofles:abofles-explainer`, side `Explain`) |
+|---|---|---|
+| T1 | Sonnet 5.5 · Low — judges **and** explains | — |
+| T2 | Sonnet 5.5 · Medium — judges **and** explains | — |
+| T3 | Sonnet 5.5 · Medium — judges, then `HANDOFF` | Opus 5.5 · Medium |
+| T4 | Opus 5.5 · Medium — judges, then `HANDOFF` | Opus 5.5 · High |
+
+Cap 40 lines each. These spawns do not count against the task's agent budget (the receipt shows them as `+ N gate`). Give the Judge everything it cannot see: the question as you would ask it, the options, what is being built, the files, what the user already decided this session, and `Language: <the language the user writes in>` — the Judge and the Explainer write every user-facing line in that language, with internal names, enum values and ticket keys turned into plain words. It also reads the memo's Decisions.
+
+- `VERDICT: ANSWERED` — the evidence settles it. State the answer and its evidence in one line, continue, **do not ask**. The hook logs it in the memo's Decisions; on T3–T4 it also adds *judge decided (🔴 Critical): … — check* to Needs you so the user sees it in the next resume block.
+- `VERDICT: ASK` (T1–T2) — `AskUserQuestion` whose **question text** is the `QUESTION`, a blank line, the `WHY` line, then the `EXPLAIN` block (table, example or diagram) — all inside the question, because the question box is what the user reads (reply text printed right before the box **is** shown above it — that is where a table goes; nothing printed is lost). The box renders **plain text** — a markdown table arrives as `| a | b |` soup, bold as `**`. Two shapes, and the hook's note after the Judge/Explainer tells you which applies:
+  - **Plain EXPLAIN**: the question text is `QUESTION`, a blank line, `WHY` — and nothing else unless EXPLAIN carries a fact the options do not (a worked example with numbers, a timeline), then that as plain lines. **Never restate the options in the question text**: the option cards already show each label with its `then:` consequence as the description, and a question that lists "A does x, B does y, C does z" above the same three cards is read twice.
+  - **Markdown EXPLAIN** (table, diagram, worked example): in **one assistant message**, first the text `📖 **Explanation for the question below**` with the block as real markdown, then the `AskUserQuestion` call — text and call in the same message, no other tool call between them (the desktop app folds text that is followed by further tool calls into a collapsed step, and a denied question folds it too). The question text carries QUESTION and WHY and ends with `📖 the full table/diagram is printed above this question` — no summary of the options. The `Stop` hook refuses to end the turn while a judged question is unasked. Never replace the question box with "reply A, B or C in chat".
+  One option per `OPTIONS` line with the `then:` consequence as the description; the `RECOMMEND` option first with `(Recommended)`.
+- `VERDICT: HANDOFF` (T3–T4) — spawn the Explainer with the Judge's `QUESTION`, `EVIDENCE` and `WHY` (never re-collect them), then ask from the Explainer's reply as above.
+
+Re-asking the **same round** reworded or translated (the user rejected the wording, or asked for Arabic) needs no second Judge: within 15 minutes of an allowed question the hook lets the next one through, and a `SendMessage` to the Judge or Explainer that produced the round (the cheap way to reword) unlocks one `AskUserQuestion` for its reply — wait for that reply and ask from its wording, never with your own translation first. A new question later is judged again. Pass `Language: <language>` to the Judge and Explainer: the override `- Language = Arabic` fixes it for a project, else it is the language the user writes in. A dismissed question is not a decision: it is not logged, and may be asked again.
+
+`- Questions = off` in the override block turns the gate off for a project; `- Pace = fast` keeps it for 🟠 Sensitive and 🔴 Critical questions only.

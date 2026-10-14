@@ -182,7 +182,7 @@ def main():
         rn = lambda out: next((p for p in ctx(out).split("\n\n") if p.startswith(("abofles: Receipt", "abofles: no receipt"))), "")
         run("start", {"session_id": "rm", "cwd": cwd, "effort": {"level": "medium"}}, led)
         out = rn(run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rm"), led))
-        check("receipt: full note, header computed (0.5 u vs Opus 5.5 · Medium 40 u)", "🧾 **1 Spawn · 0.5 u · Saved 99%** vs Opus 5.5 · Medium" in out and "- `open` → " in out and "never in a code block" in out)
+        check("receipt: full note, header computed (0.5 u vs Opus 5.5 · Medium 40 u)", "🧾 **1 Spawn · 0.5 u · Saved 99%** vs Opus 5.5 · Medium" in out and "- `open` → " in out and "no code block" in out)
         out = rn(run("post", dict(agent("opus", "xhigh", "abofles:abofles-planner", resp="STATUS: done\nCONFIDENCE: high\nPLAN:\n1. s\nRISKS:\n- r\nVERIFY: v\nOPEN: none", cwd=cwd), session_id="rm"), led))
         check("receipt: header accumulates, negative saving as cost", "🧾 **2 Spawns · 100 u · Cost +26%** vs Opus 5.5 · Medium" in out)
         out = run("receipt", {"session_id": "rm", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **2 Spawns · 100 u · Cost +25%** vs Opus 5.5 · Medium\n- `done` → x"}, led)
@@ -195,7 +195,7 @@ def main():
         check("receipt: skip -> Stop does not block", run("receipt", {"session_id": "rm", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "done."}, led) is None)
         Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Receipt = short\n")
         out = rn(run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rm"), led))
-        check("receipt: short -> one line", "one line" in out and "· open:" in out and "- `done`" not in out)
+        check("receipt: short -> one line", "one plain-markdown line" in out and "· open:" in out and "- `done`" not in out)
         Path(cwd, "CLAUDE.md").unlink()
         Path(state, "no-user-claude.md").write_text("## abofles overrides\n- Receipt = off\n")
         out = run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rm"), led)
@@ -212,7 +212,8 @@ def main():
         out = run("post", dict(agent("haiku", "low", "abofles:abofles-reader", resp=long, cwd=cwd), session_id="na"), led)
         check("post: abofles agent -> line-length warning", "too long" in ctx(out))
         run("start", {"session_id": "bg", "cwd": cwd}, led)
-        run("post", dict(agent("haiku", "low", resp={"status": "async_launched", "agentId": "bg1", "prompt": "p", "description": "t"}, cwd=cwd), session_id="bg"), led)
+        _bgout = run("post", dict(agent("haiku", "low", resp={"status": "async_launched", "agentId": "bg1", "prompt": "p", "description": "t"}, cwd=cwd), session_id="bg"), led)
+        check("receipt: a background launch carries no receipt note", "Receipt at task end" not in ctx(_bgout))
         check("receipt: background spawn running -> no block", run("receipt", {"session_id": "bg", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "waiting"}, led) is None)
         run("stop", {"session_id": "bg", "agent_id": "bg1", "last_assistant_message": "STATUS: done\nCONFIDENCE: high\nFACTS:\n- none found: x\nGAPS: none"}, led)
         out = run("receipt", {"session_id": "bg", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "all back"}, led)
@@ -435,7 +436,7 @@ def main():
         json.dump(dict(json.loads(Path(state, "qg.json").read_text()), last_ask_ts=0), open(Path(state, "qg.json"), "w"))
         aq2 = dict(aq, tool_input={"questions": [{"question": "Should refunds go to the wallet or the card?", "options": []}]})
         check("qgate: a different question later is denied again", "question gate" in reason(run("qgate", aq2, led)))
-        check("qgate: gate text puts WHY/EXPLAIN inside the question and asks for a Language line", "all inside the question" in reason(run("qgate", aq2, led)) and "Language:" in reason(run("qgate", aq2, led)))
+        check("qgate: gate text puts WHY/EXPLAIN inside the question and asks for a Language line", "question text = QUESTION" in reason(run("qgate", aq2, led)) and "Language:" in reason(run("qgate", aq2, led)))
         # SendMessage to a gate agent unlocks one question
         check("qgate: SendMessage to a non-gate agent does nothing", run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "worker-7", "message": "m"}}, led) is None)
         out = run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "abofles-explainer", "message": "reword in Arabic"}}, led)
@@ -531,12 +532,19 @@ def main():
         run("start", {"session_id": "ml", "cwd": cwd, "transcript_path": str(trm), "effort": {"level": "high"}}, led)
         json.dump(dict(json.loads(Path(state, "ml.json").read_text()), gate="auto", main_model="opus"), open(Path(state, "ml.json"), "w"))
         out = run("pre", dict(p4, session_id="ml", transcript_path=str(trm)), led)
-        check("main: first spawn of a 🔴 task on Opus·High -> fits line", "main: Opus 5.5 · High fits this 🔴 Critical task" in ctx(out) and "print this line once, now" in ctx(out))
+        check("main: first spawn of a 🔴 task on Opus·High -> fits line", "main: Opus 5.5 · High fits this 🔴 Critical task" in ctx(out) and "print this line now" in ctx(out))
         out = run("pre", dict(p4, session_id="ml", transcript_path=str(trm)), led)
         check("main: second spawn of the same task -> no line", "main:" not in ctx(out))
         json.dump(dict(json.loads(Path(state, "ml.json").read_text()), inflight=0, spawns_since_receipt=0), open(Path(state, "ml.json"), "w"))
         out = run("pre", dict(agent("haiku", "low", prompt="abofles: Unit Test / Read · T2\nq\nLine cap: 40", cwd=cwd), session_id="ml", transcript_path=str(trm)), led)
         check("main: 🟡 task on Opus·High -> suggest Sonnet·Medium with the current setting", 'main: suggest Sonnet 5.5 · Medium for this 🟡 Normal task (now Opus 5.5 · High). Switch in the model picker, or say "keep".' in ctx(out))
+        run("post", dict(agent("haiku", "low", prompt="abofles: Unit Test / Read · T2\nq\nLine cap: 40", resp=good, cwd=cwd), session_id="ml", transcript_path=str(trm)), led)
+        mg = json.loads(Path(state, "ml.json").read_text()).get("guide") or {}
+        check("guide: state carries root, ctx, task and the main suggestion for the band",
+              mg.get("root") == cwd and (mg.get("ctx") or {}).get("tokens") == 1 and (mg.get("ctx") or {}).get("mark") == 500
+              and (mg.get("task") or {}).get("spawns") == 1 and (mg.get("task") or {}).get("budget") is not None and mg["task"]["left"] == mg["task"]["budget"] - 1
+              and isinstance(mg["task"]["usd"], float) and mg.get("main") == "suggest Sonnet 5.5 · Medium (now Opus 5.5 · High)"
+              and all({"p", "text", "fill", "resolve"} <= set(i) for i in mg.get("items") or []))
         json.dump(dict(json.loads(Path(state, "ml.json").read_text()), inflight=0, spawns_since_receipt=0), open(Path(state, "ml.json"), "w"))
         check("main: judge spawn never carries the line", "main:" not in ctx(run("pre", dict(jp(2, None), session_id="ml"), led) or {}))
         # 6c. markdown EXPLAIN: printed above the question, enforced once by the hook
@@ -580,6 +588,9 @@ def main():
         Path(cwd, "DCMP.BE", "src").mkdir(parents=True, exist_ok=True); Path(cwd, "DCMP.BE", "src", "b.cs").write_text("y\n" * 5)
         out = run("post", dict(agent("haiku", "low", resp="STATUS: done\nCONFIDENCE: high\nFACTS:\n- src/b.cs:2 — y\n- DCMP.BE/src/b.cs:3 — y\nGAPS: none", cwd=str(nested)), session_id="gd"), led)
         check("analyze: paths relative to the workspace root or the nested repo both resolve", "paths not found" not in ctx(out))
+        wt = Path(tempfile.mkdtemp()); Path(wt, "App", "Fin").mkdir(parents=True); Path(wt, "App", "Fin", "Rules.cs").write_text("z\n" * 9)
+        out = run("post", dict(agent("haiku", "low", prompt=f"abofles: X / Read · T1\nWorking tree: {wt} (a worktree)\nq\nLine cap: 40", resp="STATUS: done\nCONFIDENCE: high\nFACTS:\n- App/Fin/Rules.cs:4 — z\nGAPS: none", cwd=cwd), session_id="gd"), led)
+        check("analyze: paths relative to a folder the prompt names (a worktree elsewhere) resolve", "paths not found" not in ctx(out) and "downgraded" not in ctx(out))
         out = run("post", dict(agent("haiku", "low", resp="STATUS: done\nCONFIDENCE: high\nFACTS:\n- src/b.cs:2 — y\n- src/zz.cs:3 — y\n- src/yy.cs:3 — y\nGAPS: none", cwd=str(nested)), session_id="gd"), led)
         check("analyze: most paths missing -> low", "downgraded to low" in ctx(out))
         # 11. Pace = fast: guard at 8, Minor/Normal questions unjudged, short receipt
@@ -593,7 +604,7 @@ def main():
         json.dump(dict(json.loads(Path(state, "pf.json").read_text()), task_tier_max=3), open(Path(state, "pf.json"), "w"))
         check("pace: fast -> Sensitive question still judged", "question gate" in reason(run("qgate", dict(aq, session_id="pf", tool_input={"questions": [{"question": "Refund the full amount or the fee only?", "options": []}]}), led)))
         out = run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="pf"), led)
-        check("pace: fast -> short receipt by default", "one line, plain markdown" in ctx(out))
+        check("pace: fast -> short receipt by default", "one plain-markdown line" in ctx(out))
         Path(cwd, "CLAUDE.md").unlink()
         # 12. several sessions in one project root: own Now block, own receipts, others labelled
         for sidx in ("msA", "msB"):
@@ -621,10 +632,14 @@ def main():
         # 13. guide: the ladder, the receipt line, the resume line, the CLI
         run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr)}, led)
         json.dump(dict(json.loads(Path(state, "gu.json").read_text()), gate="auto"), open(Path(state, "gu.json"), "w"))
-        out = run("post", dict(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Unit Test / Verify · T2\nq\nLine cap: 20", resp="STATUS: done\nCONFIDENCE: high\nVERDICT: FAIL\nEVIDENCE:\n- tests: 1 failed\nISSUES:\n- src/a.cs:3 — off by one", cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
+        out = run("post", dict(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Unit Test / Verify · T2\nq\nLine cap: 20", resp={"agentId": "vf1abc", "content": "STATUS: done\nCONFIDENCE: high\nVERDICT: FAIL\nEVIDENCE:\n- tests: 1 failed\nISSUES:\n- src/a.cs:3 — off by one"}, cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
         check("guide: receipt note carries the next line with the open FAIL first", "- `next` → 🧭 🔴 open FAIL · Unit Test" in ctx(out))
         gst = json.loads(Path(state, "gu.json").read_text()).get("guide") or {}
         check("guide: kept in the state for the band", gst.get("line", "").startswith("🧭 🔴") and gst.get("items"))
+        fi = (gst.get("items") or [{}])[0]
+        check("guide: an open FAIL item carries the Use prompt and the resolve command",
+              fi.get("p") == "🔴" and fi.get("fill", "").startswith("abofles: open FAIL on Unit Test (agent vf1abc) — fix it in the main session when ≤ 3 calls")
+              and fi.get("resolve") == [sys.executable, str(Path(__file__).resolve().parent / "status.py"), "--resolve", "vf1abc", "--session", "gu"])
         out = run("post", dict(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Unit Test / Verify · T2\nq\nLine cap: 20", resp="STATUS: done\nCONFIDENCE: high\nVERDICT: PASS\nEVIDENCE:\n- tests: 13 passed\nISSUES: none", cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
         check("guide: a later PASS on the topic closes the FAIL", "🔴 open FAIL" not in ctx(out))
         time.sleep(1.1)  # rows of the task are those after its start second
@@ -637,6 +652,12 @@ def main():
         GU = Path(__file__).resolve().parent / "guide.py"
         gout = _sp.run([sys.executable, str(GU), "--all"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led)).stdout
         check("guide: CLI --all lists the ladder", gout.startswith("🟠 ") and "owner decision" in gout)
+        od = ((json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items") or [{}])[0]
+        check("guide: an owner decision item asks the user after judging, and resolves through memo.py",
+              od.get("p") == "🟠" and od.get("fill", "").startswith("abofles: owner decision 1 is open: ") and od["fill"].endswith("Judge it first, then ask me with AskUserQuestion.")
+              and od.get("resolve") == [sys.executable, str(Path(__file__).resolve().parent / "memo.py"), "resolve", "1", "settled from the guide band"])
+        rout = _sp.run(od["resolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)).stdout
+        check("guide: running the owner decision's resolve command ticks it in the memo", rout.startswith("resolved:") and "1. [x]" in mf.read_text())
         out = run("post", dict(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Unit Test / Verify · T2\nq\nLine cap: 20", resp="STATUS: done\nCONFIDENCE: high\nVERDICT: FAIL\nEVIDENCE:\n- tests: 1 failed\nISSUES:\n- src/b.cs:3 — null", cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
         check("guide: a FAIL of the open task is shown", "🔴 open FAIL · Unit Test" in ctx(out))
         time.sleep(1.1)  # the receipt closes the task in a later second than its rows
@@ -687,7 +708,7 @@ def main():
         check("context: guard/pre/prompt never warn", "CONTEXT" not in ctx(run("guard", dt, led)) + ctx(run("prompt", dt, led))
               + ctx(run("pre", dict(agent("haiku", "low", cwd=cwd), session_id="cw", transcript_path=str(tr)), led)))
         out = cwatch(512_000)
-        check("context: 500K mark at Stop -> block, both branches", "CONTEXT 512K" in out and "**500K tokens**" in out and "**If no task is open:**" in out and "**If a task is open**" in out and "Next warning at 600K" in out and "last output" in out)
+        check("context: 500K mark at Stop -> block, both branches", "CONTEXT 512K" in out and "passed **500K tokens**" in out and "**If no task is open:**" in out and "**If a task is open:**" in out and "Next warning at 600K" in out and "last output" in out)
         check("context: same mark not repeated (second stop goes through)", cwatch(530_000, active=True) == "")
         check("context: sidechain usage ignored", cwatch(650_000, side=True) == "")
         out = cwatch(620_000, active=True)
@@ -703,7 +724,7 @@ def main():
         out = ctx(run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="cw3", transcript_path=str(tr)), led))
         check("context: post mode never warns", "CONTEXT" not in out)
         out = sr(run("receipt", {"session_id": "cw3", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "done"}, led))
-        check("context: override marks + receipt in one block", "**60K tokens**" in out and "Next warning at 80K" in out and "without the receipt" in out)
+        check("context: override marks + receipt in one block", "**60K tokens**" in out and "Next warning at 80K" in out and "agent(s) spawned, no receipt" in out)
         out = sr(run("receipt", {"session_id": "cw3", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": True, "last_assistant_message": "x"}, led))
         check("context: no re-send on the retry stop", out == "")
         st3 = json.loads(Path(state, "cw3.json").read_text())
@@ -722,13 +743,13 @@ def main():
         # session effort: told once per session, stored in state, re-told when it changes
         e1 = {"session_id": "ef", "cwd": cwd, "effort": {"level": "medium"}}
         out = run("start", e1, led)
-        check("effort: SessionStart prints the effort line", isinstance(out, str) and "runs at effort `medium`" in out)
+        check("effort: SessionStart prints the effort line", isinstance(out, str) and "effort is `medium`" in out)
         run("start", {"session_id": "ef2", "cwd": cwd}, led)
         out = ctx(run("prompt", dict(e1, session_id="ef2"), led))
-        check("effort: prompt tells it once", "runs at effort `medium`" in out)
+        check("effort: prompt tells it once", "effort is `medium`" in out)
         check("effort: not repeated", ctx(run("prompt", dict(e1, session_id="ef2"), led)) == "")
         out = ctx(run("guard", dict(e1, session_id="ef2", effort={"level": "high"}, tool_name="Read", tool_input={}), led))
-        check("effort: change re-told, state updated", "runs at effort `high`" in out and json.loads(Path(state, "ef2.json").read_text()).get("effort") == "high")
+        check("effort: change re-told, state updated", "effort is `high`" in out and json.loads(Path(state, "ef2.json").read_text()).get("effort") == "high")
         check("effort: subagent input ignored", ctx(run("guard", dict(e1, session_id="ef2", effort={"level": "low"}, tool_name="Read", tool_input={}, agent_id="x"), led)) == "")
         rows = [json.loads(l) for l in Path(led, "test.jsonl").read_text().splitlines()]
         check("ledger: one line per post", len(rows) == 28)

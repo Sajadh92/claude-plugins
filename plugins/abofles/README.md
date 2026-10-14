@@ -126,4 +126,4 @@ Everything lives in `scripts/gen_matrix.py`: topics, tiers, cell overrides, repl
 python3 scripts/gen_matrix.py
 ```
 
-It rewrites the topic index in `skills/abofles/SKILL.md` and regenerates `skills/abofles/references/matrix.md`. Bump `version` in `.claude-plugin/plugin.json` and in the root `.claude-plugin/marketplace.json`.
+It rewrites the topic index in `skills/abofles/references/topics.md` and regenerates `skills/abofles/references/matrix.md`. Bump `version` in `.claude-plugin/plugin.json` and in the root `.claude-plugin/marketplace.json`.

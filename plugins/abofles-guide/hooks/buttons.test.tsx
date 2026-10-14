@@ -26,7 +26,7 @@ test('draws Use, Copy and Hide buttons when the session has a guide line', async
   line = LINE.replace('fix it', 'fix the null case') // same priorities, other wording
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answered' } as never)
   expect(await ui.find({ key: 'hide' })).toBeUndefined()
-  line = '🧭 ✅ nothing open — next from the memo: wait' // the ladder changed: back
+  line = '🧭 🟡 escalate · re-run at opus·high' // the ladder changed: back
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answered' } as never)
   expect(await ui.find({ key: 'hide' })).toBeDefined()
   await ui.unmount()

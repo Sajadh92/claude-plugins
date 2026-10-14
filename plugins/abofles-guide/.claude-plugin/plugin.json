@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "abofles-guide",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Abo Fles guide band: the 🧭 next line (what to do now, by priority) drawn above the prompt box, from the state the abofles hooks keep. Needs the abofles plugin.",
   "author": {
     "name": "Sajadh92"

@@ -270,11 +270,11 @@ def budget_used(st):
     return max(0, work_spawns(st) - st.get("budget_base", 0))
 
 
-RECEIPT_FULL = ("Receipt at task end — plain markdown, never in a code block (the labels are inline-code tags), these 5 lines:\n"
-                "{header}\n- `done` → <what changed, files named>\n- `why` → <the reason or rule>\n"
+RECEIPT_FULL = ("Receipt at task end — plain markdown, no code block:\n"
+                "{header}\n- `done` → <what changed, files>\n- `why` → <the reason or rule>\n"
                 "- `check` → <command → decisive result>\n- `open` → <follow-ups: partial, low, ATTENTION, open FAIL, owner decisions — or none>{guide}\n"
-                "A field with 2+ items (several files, several follow-ups) puts nothing after the arrow and lists each item as an indented sub-bullet `  - <item>` on its own line, one idea per sub-bullet — never a long `;`-separated line.")
-RECEIPT_SHORT = "Receipt at task end — one line, plain markdown, no code block: {header} · open: <follow-ups or none>{guide_short}"
+                "A field with 2+ items: nothing after the arrow, one indented `  - <item>` sub-bullet per item, never a long `;` line.")
+RECEIPT_SHORT = "Receipt at task end — one plain-markdown line: {header} · open: <follow-ups or none>{guide_short}"
 
 
 def receipt_decision(cwd, st):
@@ -287,7 +287,7 @@ def receipt_decision(cwd, st):
     g = (st.get("guide") or {}).get("line") if guide_on(cwd) else ""
     if mode == "short":
         return "short", "abofles: " + RECEIPT_SHORT.format(header=header, guide_short=f" · {g}" if g else "")
-    return "full", "abofles: " + RECEIPT_FULL.format(header=header, guide=f"\n- `next` → {g} (copy this line as given)" if g else "")
+    return "full", "abofles: " + RECEIPT_FULL.format(header=header, guide=f"\n- `next` → {g} (copy as given)" if g else "")
 
 
 def reset_task(st):
@@ -302,6 +302,8 @@ def reset_task(st):
     st["task_top"] = None
     st["task_tier_max"] = 0
     st["task_judges"] = 0
+    st["main_hint"] = None  # the `main: suggest …` line of this task, for the guide band
+    st["main_tier"] = None
     st["budget_base"] = 0
     st["asked"] = []  # questions this task asked (a reworded re-ask needs no second judge)
     st["inflight"] = 0
@@ -341,9 +343,35 @@ def next_setting(model, effort, side):
     return m, "xhigh" if e != "xhigh" else "max"
 
 
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+
+
+def script_cmd(script, *args):
+    return [sys.executable or "python3", str(SCRIPTS_DIR / script), *[str(a) for a in args]]
+
+
+def guide_item(p, text, fill, resolve=None):
+    """One row of the guide: priority emoji, the text, the prompt the band's Use button fills, and the argv that settles it (or None)."""
+    return {"p": p, "text": text, "fill": fill, "resolve": resolve}
+
+
 def guide_items(root, st, sid):
+    """The ladder as [(emoji, text)] — the plain form for the CLI, the receipt and the resume block."""
+    return [(i["p"], i["text"]) for i in guide_entries(root, st, sid)]
+
+
+def context_state(root, st):
+    """(tokens, next mark in K or None when past the last) of the session transcript, or (None, None) when unknown."""
+    tp = st.get("transcript_path") or ""
+    tk = context_tokens(tp) if tp else None
+    if tk is None:
+        return None, None
+    return tk, next((m for m in context_marks(root) if m * 1000 > tk), None)
+
+
+def guide_entries(root, st, sid):
     """The ladder, first match highest: open FAIL/ATTENTION → unasked judged question → owner decisions → unescalated
-    partial/low → background running → context/memo hygiene → budget → the memo's Next. Returns [(emoji, text)]."""
+    partial/low → background running → context/memo hygiene → budget → the memo's Next. Returns guide_item dicts."""
     items = []
     try:
         rows = [json.loads(l) for l in ledger_path(sid).read_text().splitlines() if l.strip()]
@@ -356,13 +384,20 @@ def guide_items(root, st, sid):
         if r.get("resolved") or r.get("ts", 0) < started:
             continue
         later_pass = any(x.get("verdict") == "PASS" and x.get("topic") == r.get("topic") for x in rows[i + 1:])
+        topic, aid = r.get("topic") or r.get("side"), r.get("agent_id")
+        resolve = script_cmd("status.py", "--resolve", aid, "--session", sid) if aid else None
         if r.get("verdict") == "FAIL" and not later_pass:
-            items.append(("🔴", f"open FAIL · {r.get('topic') or r.get('side')}: fix it (main session when ≤ 3 calls), re-verify only the failed criterion"))
+            items.append(guide_item("🔴", f"open FAIL · {topic}: fix it (main session when ≤ 3 calls), re-verify only the failed criterion",
+                                    f"abofles: open FAIL on {topic} (agent {aid or '?'}) — fix it in the main session when ≤ 3 calls, then re-verify only the failed criterion. "
+                                    "If it is already fixed, say so and resolve it.", resolve))
         elif r.get("attention") and not later_pass:
-            items.append(("🔴", f"ATTENTION · {r.get('topic') or r.get('side')}: show it to the user before closing the task"))
+            items.append(guide_item("🔴", f"ATTENTION · {topic}: show it to the user before closing the task",
+                                    f"abofles: open ATTENTION on {topic} (agent {aid or '?'}) — show it to the user before closing the task and say how it is handled. "
+                                    "If it is already handled, say so and resolve it.", resolve))
     # 2. a judged question nobody asked
     if st.get("judge_ok", 0) > 0 and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT:
-        items.append(("🟠", "a judged question is unasked — AskUserQuestion now (QUESTION + WHY in the box, options as cards)"))
+        items.append(guide_item("🟠", "a judged question is unasked — AskUserQuestion now (QUESTION + WHY in the box, options as cards)",
+                                "abofles: the judged question is still unasked — ask it now with AskUserQuestion."))
     # 3. owner decisions open in the memo
     try:
         need = [l for l in memo_read(root)["Needs you"].splitlines() if "[ ]" in l]
@@ -370,7 +405,12 @@ def guide_items(root, st, sid):
         need = []
     if need:
         first = re.sub(r"^(\d+)\. \[ \] \S+ \S+ · ", r"\1) ", need[0])
-        items.append(("🟠", f"{len(need)} owner decision{'s' if len(need) > 1 else ''} open — ask (judge first): {clip(first, 90)}"))
+        mnum = re.match(r"\d+", need[0].strip())
+        num = mnum.group(0) if mnum else ""
+        body = re.sub(r"\s*\(s:[0-9a-f]{4,8}\)\s*$", "", re.sub(r"^\d+\. \[ \] \S+ \S+ · ", "", need[0].strip()))
+        items.append(guide_item("🟠", f"{len(need)} owner decision{'s' if len(need) > 1 else ''} open — ask (judge first): {clip(first, 90)}",
+                                f"abofles: owner decision {num} is open: {clip(body, 140).rstrip('.!?')}. Judge it first, then ask me with AskUserQuestion.",
+                                script_cmd("memo.py", "resolve", num, "settled from the guide band") if num else None))
     # 4. a reply of this task that needs Step 4 and got nothing
     for r in rows:
         if r.get("ts", 0) <= started or r.get("resolved") or side_of(r.get("agent") or "")[0] in ("judge", "explainer"):
@@ -379,22 +419,23 @@ def guide_items(root, st, sid):
             continue
         if r.get("status") in ("partial", "blocked") or r.get("confidence") == "low":
             nm, ne = next_setting(r.get("model"), r.get("effort"), r.get("side"))
-            items.append(("🟡", f"escalate · {r.get('side')} {label(r.get('model'), r.get('effort'))} came back {r.get('status')}/{r.get('confidence')} — re-run that subtask at {label(nm, ne)} (Step 4), or say why not"))
+            items.append(guide_item("🟡", f"escalate · {r.get('side')} {label(r.get('model'), r.get('effort'))} came back {r.get('status')}/{r.get('confidence')} — re-run that subtask at {label(nm, ne)} (Step 4), or say why not",
+                                    f"abofles: the {r.get('side')} agent on {r.get('topic') or '?'} (agent {r.get('agent_id') or '?'}) came back {r.get('status')}/{r.get('confidence')} — "
+                                    f"re-run that subtask at {label(nm, ne)} (Step 4), or say why not; if its reply is sound, say so and resolve it.",
+                                    script_cmd("status.py", "--resolve", r["agent_id"], "--session", sid) if r.get("agent_id") else None))
             break
     # 5. background agents still running
     running = sum(1 for r in rows if r.get("status") == "pending")
     if running:
-        items.append(("⏳", f"{running} background agent{'s' if running > 1 else ''} running — collect them (and their receipt) before the next ticket"))
+        items.append(guide_item("⏳", f"{running} background agent{'s' if running > 1 else ''} running — collect them (and their receipt) before the next ticket",
+                                "abofles: collect the background agents and print their receipt."))
     # 6. context and memo hygiene
-    tp = st.get("transcript_path") or ""
-    tk = context_tokens(tp) if tp else None
+    tk, nxt = context_state(root, st)
     if tk is not None:
-        marks = context_marks(root)
-        nxt = next((m for m in marks if m * 1000 > tk), None)
         if nxt is None:
-            items.append(("🧠", f"context {tk // 1000}K is past the last mark — /abofles:memo, then /compact at the next task boundary"))
+            items.append(guide_item("🧠", f"context {tk // 1000}K is past the last mark — /abofles:memo, then /compact at the next task boundary", "/abofles:memo"))
         elif nxt * 1000 - tk <= 50_000:
-            items.append(("🧠", f"context {tk // 1000}K, mark {nxt}K is {(nxt * 1000 - tk) // 1000}K away — plan /abofles:memo + /compact at the next task boundary"))
+            items.append(guide_item("🧠", f"context {tk // 1000}K, mark {nxt}K is {(nxt * 1000 - tk) // 1000}K away — plan /abofles:memo + /compact at the next task boundary", "/abofles:memo"))
     try:
         mine = next((b for k, b in now_blocks(memo_read(root)["Now"]) if k == sid8(sid)), None)
         wm = re.search(r"^Written\s+(\S+ \S+)", mine or "", re.M)
@@ -402,14 +443,14 @@ def guide_items(root, st, sid):
             age_min = int((time.time() - time.mktime(time.strptime(wm.group(1), "%Y-%m-%d %H:%M"))) // 60)
             since = sum(1 for l in memo_read(root)["Journal"].splitlines() if f"s:{sid8(sid)}" in l and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > wm.group(1)[5:])
             if age_min >= 120 and since:
-                items.append(("🧠", f"memo Now is {span(age_min)} old with {since} receipt{'s' if since > 1 else ''} since — run /abofles:memo before the next break"))
+                items.append(guide_item("🧠", f"memo Now is {span(age_min)} old with {since} receipt{'s' if since > 1 else ''} since — run /abofles:memo before the next break", "/abofles:memo"))
     except Exception:
         pass
     # 7. budget nearly out on an open chain
     budget, src = task_budget(root, st, st.get("task_tier_max") or None)
     if budget is not None and work_spawns(st) and budget - budget_used(st) <= 1:
         left = max(0, budget - budget_used(st))
-        items.append(("💰", f"agent budget: {left} of {budget} left ({src}) — finish in the main session, or `/abofles:agents N`"))
+        items.append(guide_item("💰", f"agent budget: {left} of {budget} left ({src}) — finish in the main session, or `/abofles:agents N`", "/abofles:agents"))
     # 8. nothing open: the memo's Next
     if not items:
         nxt_line = ""
@@ -419,8 +460,20 @@ def guide_items(root, st, sid):
             nxt_line = nm.group(1).strip() if nm else ""
         except Exception:
             pass
-        items.append(("✅", f"nothing open — next from the memo: {clip(nxt_line, 110)}" if nxt_line else "nothing open — pick the next ticket and route it with abofles first"))
+        items.append(guide_item("✅", f"nothing open — next from the memo: {clip(nxt_line, 110)}" if nxt_line else "nothing open — pick the next ticket and route it with abofles first",
+                                nxt_line or "Pick the next ticket and route it with abofles first."))
     return items
+
+
+def main_hint_short(st):
+    """`suggest Opus 5.5 · Medium (now Fable 5.1 · Medium)` for the band's meter, from the session's current model and
+    effort — None when they fit the open task's tier or the model is unknown."""
+    t = st.get("main_tier") or st.get("task_tier_max") or 2
+    sm, se = MAIN_SUGGEST.get(t, ("opus", "medium"))
+    cm, ce = st.get("main_model"), st.get("effort")
+    if not cm or (cm == sm and (not ce or ce == se)):
+        return None
+    return f"suggest {label(sm, se)} (now {label(cm, ce) if ce else label(cm)})"
 
 
 def refresh_guide(root, st, sid):
@@ -428,9 +481,17 @@ def refresh_guide(root, st, sid):
     if not guide_on(root):
         st["guide"] = None
         return None
-    items = guide_items(root, st, sid)
-    line = "🧭 " + " · ".join(f"{e} {t}" for e, t in items[:3]) + (f" · +{len(items) - 3} more" if len(items) > 3 else "")
-    st["guide"] = {"line": line, "items": [{"p": e, "text": t} for e, t in items], "ts": int(time.time())}
+    items = guide_entries(root, st, sid)
+    line = "🧭 " + " · ".join(f"{i['p']} {i['text']}" for i in items[:3]) + (f" · +{len(items) - 3} more" if len(items) > 3 else "")
+    tk, nxt = context_state(root, st)
+    task = None
+    if work_spawns(st):
+        budget, _ = task_budget(root, st, st.get("task_tier_max") or None)
+        task = {"spawns": work_spawns(st), "usd": float(st.get("task_usd", 0.0)), "budget": budget,
+                "left": max(0, budget - budget_used(st)) if budget is not None else None}
+    st["guide"] = {"line": line, "ts": int(time.time()), "root": root, "items": items,
+                   "ctx": {"tokens": tk, "mark": nxt} if tk is not None else None,
+                   "task": task, "main": main_hint_short(st) if work_spawns(st) else None}
     return line
 
 
@@ -841,8 +902,8 @@ def resume_block(cwd, away_min=None, session_id="", guide=None):
 
 
 def resume_note(block, why):
-    return (f"abofles RESUME ({why}): print the block below **verbatim, first in your reply** — do not re-read the transcript "
-            f"or files to rebuild it — then handle the prompt as usual (route lines, the `main:` line the hook hands you at a task's first spawn, receipts). Resolve an item with `python3 \"{Path(__file__).resolve().parent.parent / 'scripts' / 'memo.py'}\" resolve <n> \"<note>\"` once the user settles it.\n\n{block}")
+    return (f"abofles RESUME ({why}): print the block below **verbatim, first in your reply**, no re-reading; then handle the prompt as usual. "
+            f"Settle an item: `python3 \"{Path(__file__).resolve().parent.parent / 'scripts' / 'memo.py'}\" resolve <n> \"<note>\"`.\n\n{block}")
 
 
 def decision(data):
@@ -976,11 +1037,11 @@ def gate_question(st):
     """The question the skill asks, in the shape the decision hook parses back."""
     m = mode_of(st)
     return (f"{GATE_MARK}: ask with AskUserQuestion, one question containing the words `{GATE_MARK}`, options in this order — "
-            "1) `Auto (recommended)` — abofles sizes every task by topic, side and tier (Minor {0} · Normal {1} · Sensitive {2} · Critical {3} agents), no further questions this session; "
-            "2) `This task: N agents` — N from your route plan, with the units and $ estimate, asked again next task; "
-            "3) `Main session only` — 0 agents this task" + (" (costly: the main model does every read itself)" if m == "orchestrator" else "") + "; "
-            "4) " + ("`Max: N agents · M parallel` for a Large task" if m == "orchestrator" else "`Switch main to Opus 5.5 and orchestrate` — end the turn with one line telling the user to pick Opus in the model picker and send \"go\"") +
-            ". The user may type a number or `off` in Other. The hook records the answer; you do nothing else.").format(*AGENT_BUDGETS[m])
+            "1) `Auto (recommended)` — sized per task by topic, side, tier (Minor {0} · Normal {1} · Sensitive {2} · Critical {3} agents), no more questions this session; "
+            "2) `This task: N agents` — N from your route plan, with units and $ estimate; "
+            "3) `Main session only` — 0 agents this task" + (" (costly)" if m == "orchestrator" else "") + "; "
+            "4) " + ("`Max: N agents · M parallel` for a Large task" if m == "orchestrator" else "`Switch main to Opus 5.5 and orchestrate` — tell the user in one line to pick Opus in the model picker and send \"go\"") +
+            ". The user may type a number or `off` in Other. The hook records the answer.").format(*AGENT_BUDGETS[m])
 
 
 def apply_gate_answer(st, answer):
@@ -1029,29 +1090,24 @@ def question_language(cwd):
 
 def question_gate_text(st, lang=None):
     rows = " · ".join(f"{tier_name(t)} {label(j, je)}" + (f" → {label(e, ee)}" if e else " (judges and explains)") for t, (j, je, e, ee) in QUESTION_ROUTE.items())
-    return ("Abo Fles (ابو فليس): question gate — a Judge agent must see this question first. Spawn `abofles:abofles-judge` (first prompt line "
-            "`abofles: <Topic> / Judge · T<tier>`; give it the question, the options, the task context, the files, what the user already decided, "
-            f"`Language: {lang or '<the language the user writes in>'}` and `Line cap: 40`). "
-            f"Routes: {rows}. ANSWERED → state the answer with its evidence in one line and continue, no question. ASK → AskUserQuestion whose question text is "
-            "its QUESTION, a blank line, WHY, then the EXPLAIN block — all inside the question (the user reads the box; reply text printed right before the box is visible above it). "
-            "The question box renders PLAIN TEXT: no markdown table, no `|`, no `**`, no code fence. The question text is QUESTION + WHY; the options are the option cards "
-            "(label + `then:` as description) — never restate them in the question text; add EXPLAIN there only when it carries a fact the options do not (a worked example, numbers). "
-            "When EXPLAIN is a table, diagram or worked example that needs markdown, print it first in your reply under "
-            f"`{EXPLAIN_MARK} **Explanation for the question below**`, then ask with a plain summary inside and `{EXPLAIN_MARK} the full table/diagram is printed above this question` at the end "
-            "(the hook checks the transcript and refuses the question until the explanation is printed). "
-            "Options from OPTIONS (label + `then:` as the description), RECOMMEND first with `(Recommended)`. "
-            "HANDOFF (T3–T4) → spawn `abofles:abofles-explainer` (`abofles: <Topic> / Explain · T<tier>`, same Language line) with the Judge's QUESTION, EVIDENCE and WHY, then ask from its reply. "
-            "Re-asking the same round reworded needs no second judge (a SendMessage to the explainer, or the same questions again, pass). "
-            "Only the Abo Fles agent gate question is exempt. `- Questions = off` in the override block turns this off.")
+    return ("Abo Fles (ابو فليس): question gate — a Judge must see this question first. Spawn `abofles:abofles-judge` (first line "
+            "`abofles: <Topic> / Judge · T<tier>`; give it the question, options, context, files, prior user decisions, "
+            f"`Language: {lang or '<the language the user writes in>'}` and `Line cap: 40`). Routes: {rows}. "
+            "ANSWERED → state the answer with its evidence in one line, no question. "
+            "ASK → AskUserQuestion: question text = QUESTION, a blank line, WHY (EXPLAIN only if it adds a fact the options lack); "
+            "options = OPTIONS (label + `then:` as description), RECOMMEND first with `(Recommended)`, not restated in the text. "
+            "The box is PLAIN TEXT: no table, `|`, `**`, code fence. If EXPLAIN needs markdown (table, diagram, example), print it first in your reply under "
+            f"`{EXPLAIN_MARK} **Explanation for the question below**`, then ask with a plain summary ending in `{EXPLAIN_MARK} the full table/diagram is printed above this question` "
+            "HANDOFF (T3–T4) → spawn `abofles:abofles-explainer` (`abofles: <Topic> / Explain · T<tier>`, same Language) with the Judge's QUESTION, EVIDENCE, WHY; ask from its reply. "
+            "A reworded re-ask needs no second judge; the agent gate question is exempt.")
 
 
-ASK_PLAIN = ("question judged — AskUserQuestion now: the question text is QUESTION, a blank line, WHY — nothing else, unless EXPLAIN adds a fact the options do not carry "
-             "(a worked example with numbers, a timeline), then that as plain lines (no markdown table, no `|`, no `**`). Never restate the options in the question text: "
-             "they are the option cards — label from OPTIONS, `then:` as the description, RECOMMEND first with `(Recommended)`")
-ASK_MD = (f"question judged — its EXPLAIN needs markdown (table / diagram / example). In ONE assistant message, in this order: (1) the text `{EXPLAIN_MARK} **Explanation for the question below**` "
-          "followed by the EXPLAIN block as real markdown — the user sees it rendered right above the question box when it is in the same message as the call; (2) the AskUserQuestion call, "
-          f"whose question text is QUESTION, a blank line, WHY, ending with `{EXPLAIN_MARK} the full table/diagram is printed above this question` — no summary of the options in the text (they are the option cards). "
-          "Never a tool call between the text and the question (the app folds text that is followed by other tool calls), never \"reply A, B or C in chat\" instead of the question box.")
+
+ASK_PLAIN = ("question judged — AskUserQuestion now: question text = QUESTION, a blank line, WHY; add EXPLAIN only if it carries a fact the options lack, as plain lines "
+             "(no table, `|`, `**`). Options = OPTIONS (label + `then:` as description), RECOMMEND first with `(Recommended)`; never restate them in the text.")
+ASK_MD = (f"question judged — its EXPLAIN needs markdown (table / diagram / example). In ONE message: (1) `{EXPLAIN_MARK} **Explanation for the question below**` + the EXPLAIN as markdown; "
+          f"(2) the AskUserQuestion call, text = QUESTION, a blank line, WHY, ending with `{EXPLAIN_MARK} the full table/diagram is printed above this question`. "
+          "No tool call between the text and the question; never \"reply in chat\" instead of the box.")
 
 
 REASK_WINDOW = 900  # seconds after an allowed question in which the same round may be asked again (reworded, translated) with no judge
@@ -1093,6 +1149,9 @@ def qgate(data):
     deny(question_gate_text(st, question_language(project_root(data, st))))
 
 
+SENDMSG_TEXT = "abofles: gate agent messaged — one AskUserQuestion unlocked. Wait for its reply, then ask from its wording, not your own translation."
+
+
 def sendmsg(data):
     """PostToolUse on SendMessage: a message to a Judge/Explainer agent (a cheap re-ask of the same round) brings a
     reply that counts as a judged question — unlock one AskUserQuestion."""
@@ -1117,7 +1176,7 @@ def sendmsg(data):
         st["judge_ok"] = st.get("judge_ok", 0) + 1
         st["gate_wait_ts"] = int(time.time())
         save_state(sid, st)
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "abofles: message sent to a gate agent — one AskUserQuestion is unlocked for its reply. Wait for the reply (it arrives as a task result), then ask from its wording; do not ask with your own translation first."}}))
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": SENDMSG_TEXT}}))
 
 
 def explain_block(text):
@@ -1237,12 +1296,11 @@ def context_block(tokens, mark, marks, in_task):
     nxt = next((m for m in marks if m > mark), None)
     nxt_line = f"Next warning at {nxt}K." if nxt else "This is the last mark — compact before the window is full."
     block = (f"# ⚠️ **CONTEXT {tokens // 1000}K — RUN /abofles:memo, THEN /compact**\n"
-             f"**Abo Fles (ابو فليس):** this session passed **{mark}K tokens** of context. {nxt_line}\n"
-             f"**If no task is open:** stop here — run `/abofles:memo` (hand-off memo: done, left, decisions, next step), **then** `/compact`. Safe between tasks.\n"
-             f"**If a task is open** (a chain running, edits half applied, a verifier not back): do **not** compact yet — finish the step, print the receipt, **then** memo and `/compact`.")
-    return (f"abofles CONTEXT WATCH: context is {tokens:,} tokens (mark {mark}K passed). The turn is over — print the block below "
-            f"**verbatim** now as your last output — heading, bold, all four lines — then add one line saying which branch applies. "
-            f"Start no new work; the user decides on memo and /compact.\n\n{block}")
+             f"**Abo Fles (ابو فليس):** passed **{mark}K tokens**. {nxt_line}\n"
+             f"**If no task is open:** run `/abofles:memo`, **then** `/compact`.\n"
+             f"**If a task is open:** finish the step, print the receipt, **then** memo and `/compact`.")
+    return (f"abofles CONTEXT WATCH: {tokens:,} tokens (mark {mark}K). Print the block below **verbatim** as your last output "
+            f"(all four lines), add one line naming the branch that applies, start no new work.\n\n{block}")
 
 
 def context_watch(data, st):
@@ -1401,7 +1459,7 @@ def effort_note(data, st):
     if not e or st.get("effort_told") == e:
         return None
     st["effort_told"] = e
-    return f"abofles: this session runs at effort `{e}` (read from the session settings by the hook). Use it in Step 0 and in the `main:` line; no need to call get_session."
+    return f"abofles: session effort is `{e}` (from settings). Use it in Step 0 and the `main:` line; no get_session call."
 
 
 def deny(reason):
@@ -1442,6 +1500,15 @@ def midturn_receipt(data, st):
         if has_receipt(t):
             return parse_receipt(t)
     return None
+
+
+def budget_deny(budget, src, no_tier, used):
+    return (f"Abo Fles (ابو فليس): this task's agent budget is {budget} ({src}{' — no `abofles: <Topic> / <Side> · T<n>` first line, sized Normal' if no_tier else ''}); {used} already ran or are running. "
+            f"Finish in the main session, or raise it: `/abofles:agents N` (chat `agents N` → `python3 \"{Path(__file__).resolve().parent.parent / 'scripts' / 'agents.py'}\" set N`).")
+
+
+def cap_deny(cap):
+    return f"Abo Fles (ابو فليس): {cap} background agents are already running (Parallel = {cap}). Wait for one, or raise `Parallel`."
 
 
 def pre(data):
@@ -1495,6 +1562,8 @@ def pre(data):
         if not over_budget and not over_cap and not is_q and work_spawns(st) == 0 and not st.get("inflight"):
             refresh_main_model(data, st)
             ml = main_line(st, tier)  # the task's first work spawn: hand over the Step 0 line so it is printed every task
+            st["main_hint"] = ml if ml and ml.startswith("main: suggest") else None
+            st["main_tier"] = tier or st.get("task_tier_max") or 2  # the tier that line was computed for: the band follows it
         if not over_budget and not over_cap:  # reserve the slot now: parallel Agent calls run their hooks at the same time
             if not is_q:
                 st["inflight"] = st.get("inflight", 0) + 1
@@ -1504,11 +1573,10 @@ def pre(data):
     if mid:
         memo_journal(cwd, sid, mid)
     if over_budget:
-        deny(f"Abo Fles (ابو فليس): this task's agent budget is {budget} ({src}{' — tier unknown: no `abofles: <Topic> / <Side> · T<n>` first line, sized as Normal' if no_tier else ''}) and {used} already ran or are running. Finish in the main session, "
-             f"or ask the user to raise it (`/abofles:agents N`, or `agents N` in chat → run `python3 \"{Path(__file__).resolve().parent.parent / 'scripts' / 'agents.py'}\" set N`).")
+        deny(budget_deny(budget, src, no_tier, used))
     if over_cap:
-        deny(f"Abo Fles (ابو فليس): {cap} background agents are already running (Parallel = {cap}). Wait for one to finish, or raise `Parallel` in the override block.")
-    msgs = [m for m in (en, f"abofles: new task — print this line once, now (as the next line of your reply), exactly as given: `{ml}`" if ml else None) if m]
+        deny(cap_deny(cap))
+    msgs = [m for m in (en, f"abofles: new task — print this line now, as the next line of your reply, exactly: `{ml}`" if ml else None) if m]
     if msgs:
         msg = "\n\n".join(msgs)
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
@@ -1555,7 +1623,20 @@ def side_of(stype):
     return k, {"reader": "Read", "analyst": "Analyse", "planner": "Plan", "worker": "Work", "verifier": "Verify", "judge": "Judge", "explainer": "Explain"}.get(k, "?")
 
 
-def resolve_cited(cwd, rel):
+def prompt_dirs(prompt):
+    """Absolute folders the spawn prompt names (`Working tree: /…/worktree`): a reader working there cites paths
+    relative to them, not to the session's project root."""
+    out = []
+    for m in re.finditer(r"(?<![\w.])(/(?:[\w.\-]+/)*[\w.\-]+)", prompt or ""):
+        d = m.group(1).rstrip(".")
+        if d not in out and os.path.isdir(d) and d.count("/") >= 3:
+            out.append(d)
+        if len(out) >= 5:
+            break
+    return out
+
+
+def resolve_cited(cwd, rel, extra=()):
     """A cited repo-relative path, looked up from cwd, then its parents (3 levels) and its first-level folders — a
     workspace holds several repos and the agent may cite paths from another one's root. Returns the file or None."""
     if not rel:
@@ -1564,7 +1645,7 @@ def resolve_cited(cwd, rel):
         return rel if os.path.exists(rel) else None
     if "..." in rel or "…" in rel:
         return "abbreviated"  # `.../Handler.cs` — a shortened repeat of a path cited in full above, not a claim
-    bases = [cwd or os.getcwd()]
+    bases = [*extra, cwd or os.getcwd()]
     here = Path(cwd or os.getcwd())
     bases += [str(x) for x in list(here.parents)[:3]]
     try:
@@ -1581,7 +1662,7 @@ def resolve_cited(cwd, rel):
     return None
 
 
-def analyze(text, stype, cap, cwd):
+def analyze(text, stype, cap, cwd, extra=()):
     """Check one reply. Returns (fields, warnings)."""
     kind, _ = side_of(stype)
     lines = [l for l in text.splitlines() if l.strip()]
@@ -1628,7 +1709,7 @@ def analyze(text, stype, cap, cwd):
         for m in re.finditer(r"(?<![\w./\-])(/?(?:[\w.\-]+/)+[\w.\-]+\.[A-Za-z0-9]{1,6}):(\d+)", text):
             path, ln = m.group(1), int(m.group(2))
             rel = path[len(cwd) + 1:] if cwd and path.startswith(cwd.rstrip("/") + "/") else path
-            full = resolve_cited(cwd, rel) or (path if os.path.exists(path) else None)
+            full = resolve_cited(cwd, rel, extra) or (path if os.path.exists(path) else None)
             if full == "abbreviated":
                 continue
             cited.add(rel)
@@ -1774,6 +1855,9 @@ def post(data):
         "cap": cap,
         "description": ti.get("description", "")[:80],
     }
+    dirs = prompt_dirs(prompt)
+    if dirs:
+        entry["dirs"] = dirs  # folders the prompt named: cited paths resolve from them too (close_row reads it back)
     warnings = []
     kind = side_of(stype)[0]
     unlock = 0
@@ -1782,7 +1866,7 @@ def post(data):
         entry["confidence"] = None
     else:
         text = response_text(resp)
-        fields, warnings = analyze(text, stype, cap, project_root(data, load_state(data.get("session_id", ""))))  # paths resolve from the project root, not a drifted shell cwd
+        fields, warnings = analyze(text, stype, cap, project_root(data, load_state(data.get("session_id", ""))), entry.get("dirs") or ())  # paths resolve from the project root, not a drifted shell cwd
         entry.update(fields)
         if kind in ("judge", "explainer"):
             blocks = judge_blocks(text) if kind == "judge" else [judge_fields(text)]
@@ -1868,7 +1952,7 @@ def post(data):
         warnings.append(f"agent budget {budget} reached for this task ({bsrc}) — the next spawn is denied unless the user raises it")
     if total in (20, 50, 100, 200):
         warnings.append(f"{total} spawns this session so far — if the user did not ask for a run of this size, say so in one line with /abofles:bill's $")
-    rnote = None if receipt_mode(root)[0] == "off" else instruction
+    rnote = None if receipt_mode(root)[0] == "off" or is_async else instruction  # a background launch: the receipt is due when the chain ends (the Stop hook asks for it then)
 
     # session cap from the project override block
     cap_units = session_cap(root)
@@ -1949,6 +2033,10 @@ WRITE_CMD = re.compile(r"(^|[^<>])>>?\s*[^&|]|<<|\btee\b")  # output redirected 
 MCP_READ = re.compile(r"^mcp__.*__(get|search|read|list|fetch|query|view|find|lookup|describe|execute_?read)(?!en|_?or_?create|_?and_?replace)", re.I)
 
 
+def guard_text(n):
+    return f"abofles: {n} direct reads in a row — a Read agent's job (haiku·low). Spawn one with a numbered question list, or finish in ≤3 calls."
+
+
 def guard(data):
     """PreToolUse on Read/Grep/Glob and read-only Bash: more than 3 direct reads in a row means the main session
     is doing a Read agent's job. Warn via additionalContext (an `allow` reason is shown to the user only), never block.
@@ -1991,8 +2079,7 @@ def guard(data):
     if en:
         msgs.append(en)
     if threshold:
-        msgs.append(f"abofles: {n} direct reads in a row by the main session (files, shell reads and connector lookups such as Jira) — "
-                    f"in orchestrator mode this is a Read agent's job (haiku·low). Spawn one with a numbered question list, or finish in ≤3 calls.")
+        msgs.append(guard_text(n))
     if msgs:
         msg = "\n\n".join(msgs)
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
@@ -2034,6 +2121,12 @@ def background_running(session_id):
         return False
 
 
+def unasked_text(md):
+    return ("abofles: a judged question is still unasked. Ask it now with AskUserQuestion — "
+            + (f"markdown explanation first in your reply under `{EXPLAIN_MARK} **Explanation for the question below**`, then the question with a plain summary. " if md else "QUESTION, WHY and plain EXPLAIN inside the question text. ")
+            + "Never \"reply in chat\" instead of the box.")
+
+
 def receipt(data):
     """Stop: (1) if this turn spawned abofles agents and the final message has no receipt block, refuse the stop
     once so the 5-line receipt gets printed (`stop_hook_active` means we already did); (2) the context watch —
@@ -2066,7 +2159,7 @@ def receipt(data):
             if kind == "skip" or data.get("stop_hook_active"):
                 reset_task(st)  # the task is closed (receipt not wanted, or the one nudge already spent)
             else:
-                reasons.append(f"abofles: this turn spawned {pending} agent(s) and ended without the receipt. Print it now.\n" + instruction.removeprefix("abofles: "))
+                reasons.append(f"abofles: {pending} agent(s) spawned, no receipt. Print it now.\n" + instruction.removeprefix("abofles: "))
         elif not pending and st.get("gate") == "task" and not st.get("task_budget"):
             st["gate"], st["task_budget"], st["task_parallel"] = None, None, None  # "Main session only" was for that turn's task
         if st.get("judge_ok", 0) > 0 and not unasked:
@@ -2076,9 +2169,7 @@ def receipt(data):
         if unasked:
             st["judge_ok"] = max(st.get("judge_ok", 0), 1)  # keep the unlock alive for the question that must follow
             st["explain_md"] = unasked_md
-            reasons.append("abofles: a judged question is still unasked (the Judge/Explainer unlocked it, no AskUserQuestion followed). Ask it now with AskUserQuestion — "
-                           + (f"its markdown explanation goes in your reply text first, under `{EXPLAIN_MARK} **Explanation for the question below**`, then the question with a plain summary inside. " if unasked_md else "QUESTION, WHY and the plain EXPLAIN lines inside the question text. ")
-                           + "Never end the turn with \"reply in chat\" instead of the question box.")
+            reasons.append(unasked_text(unasked_md))
         if keep_unlock:
             st["judge_ok"] = max(st.get("judge_ok", 0), keep_unlock)
         cw = context_watch(data, st)
@@ -2097,7 +2188,7 @@ def close_row(row, text, st, sid, cwd, how=""):
     """Fill a pending ledger row from the agent's final text (or close it without one). Caller holds the state lock."""
     stype = row.get("agent") or ""
     if text:
-        fields, warnings = analyze(text, stype, row.get("cap"), row.get("cwd") or cwd)
+        fields, warnings = analyze(text, stype, row.get("cap"), row.get("cwd") or cwd, row.get("dirs") or ())
     else:  # no reply text (killed, timed out): close the row anyway so the chain can end
         fields, warnings = {"status": "blocked", "confidence": "low"}, ["background agent ended without a reply"]
     row.update(fields)

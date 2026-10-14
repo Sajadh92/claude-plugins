@@ -1,0 +1,34 @@
+# Memo, resume, guide and context watch
+
+Read when a resume block, a context-mark warning, a memo write or a Needs-you item is involved.
+
+**The guide line.** The hook computes `🧭 …` from the ledger, the memo, the state and the context size — a priority ladder: 🔴 open FAIL/ATTENTION · 🟠 judged question unasked, owner decisions open · 🟡 partial/low reply not escalated (with the Step 4 setting) · ⏳ background agents running · 🧠 context near a mark, memo Now stale · 💰 budget nearly out · ✅ the memo's Next. It is advice: copy it, then decide; the user sees the same line in the resume block (`guide`) and in the band above the prompt when the `abofles-guide` mod is installed. `/abofles:guide [--all]` prints it on demand; `- Guide = off` removes it.
+
+### Memo — the work journal (so the user never pays twice to re-read)
+
+`.claude/abofles-memo.md` in the **project root — the directory the session started in** — is kept by the hooks, not by you. Several sessions may share one root: each keeps its **own Now block** (`Session <id>` inside the Now section), journal lines and Needs-you items carry the session tag `s:<id>`, and the resume block shows this session's Now and receipts only — other sessions' Now blocks appear as one labelled hint ("their work, not yours"), never as your `next`. A `cd` into a worktree or a nested repository never moves it (the hooks remember the root; a stray memo inside a team repo would be one `git add -A` from a commit). On its first write the hooks add `.claude/abofles-memo.*` to the root's `.git/info/exclude`, so it never shows in `git status`; the lock lives under `~/.abofles/state/`, never in the project.
+
+- **Journal** — every receipt you print is parsed by the hooks (at the turn's end, or at the next spawn when you printed it mid-turn) and appended as one line (header · done · check · open). A receipt printed mid-turn also closes its task there: the budget and the header start again for the next ticket. Newest first, last 40 kept.
+- **Needs you** — every `open` item that is an ATTENTION, a FAIL, an owner decision or a question becomes a numbered `[ ]` item that stays until resolved. This is the list of things the user must not miss.
+- **Decisions** — every `AskUserQuestion` you ask is logged as the question sentence (not the story before it) with the answer. A logged decision is settled: never reopen it, never ask it again. A dismissed question is not logged. The Needs-you item that raised the question is ticked when it is answered.
+- **Now** — the only section you write, via `/abofles:memo` (`memo.py now`): Task, Done, Left (one `Left` line per item — all of them are shown), Decisions, Next, Verify, Tree. The hook stamps it `Written <date time>`; the resume block shows that age and, when receipts came after it, a `since` line saying `now`/`next` may be stale — after a long working stretch, run `/abofles:memo` again before a break or a compact.
+
+The **resume block** (`📍 **Resume**` · now · left · next · needs you · last 3 receipts · guide — a field with 2+ items is rendered as sub-bullets, so write one `Left` line per item in the memo) is handed to you by the hooks after a `/compact`, at session start when a memo exists, and on the first prompt after the user was away `Break` minutes (default 10). **Print it verbatim, first in your reply, then handle the prompt.** Never rebuild it by re-reading the transcript, the ledger or files — the user already paid for that output once. `/abofles:resume` prints it on demand.
+
+When the user settles an open item in chat, run `python3 "<plugin root>/scripts/memo.py" resolve <n> "<what was decided>"` (one cheap call) so it leaves the list; when something is decided in prose without a question, `… memo.py note "<decision>"`. Put every owner decision and ATTENTION in the receipt's `open` line — that is how it reaches the list.
+
+### Context watch — when to compact
+
+The hooks read the session's context size from the transcript (the token count the next request will carry) and warn **once per mark** at 500K, 600K, 700K, 750K, 800K, 850K and 900K tokens (project override: `- Context marks = …`). When several marks are jumped at once, only the highest one warns. The warning arrives **once**, from the `Stop` hook at the **end of a turn** (when you finish or pause) — never at the start of a turn or between tool calls. The hook refuses that stop once and hands you the block; it is never sent again, so show it then. When it arrives:
+
+1. Print the block it carries **verbatim as your last output of the turn** — a level-1 heading in bold, four lines — plus one line naming the branch that applies. Start no new work.
+2. The block holds both advices; **you** pick the one that is true:
+   - **No task open** → stop here. Run `/abofles:memo` (writes the Now section of `.claude/abofles-memo.md`: task, done, left, decisions, next, verify), then the user runs `/compact`. The resume block comes back right after the compact. Compacting between tasks is safe.
+   - **Task open** (edits half applied, a chain running, a verifier not yet back) → do **not** compact now; a compact drops the chain's working state. Finish the current step, print the receipt, run `/abofles:memo`, **then** compact.
+3. Compacting re-arms the marks: after `/compact` the context drops and every mark warns again when passed.
+
+`/abofles:status` shows the current context size and the next mark; `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py" tokens` prints it alone.
+
+The 900K mark is the last one: say so and treat it as "compact before the next task starts, whatever the state".
+
+**Session cap.** A project may set `- Session cap = N` (units) in its override block. The `PostToolUse` hook warns when the session's spawns pass it; then stop spawning and ask the user before the next spawn.

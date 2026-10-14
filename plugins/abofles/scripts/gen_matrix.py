@@ -5,14 +5,15 @@ Edit TIERS / TOPICS below, then run:
 
     python3 scripts/gen_matrix.py
 
-It rewrites the topic index inside skills/abofles/SKILL.md (between the
-`<!-- topics:start -->` / `<!-- topics:end -->` markers) and regenerates
-skills/abofles/references/matrix.md.
+It rewrites the topic index inside skills/abofles/references/topics.md (between
+the `<!-- topics:start -->` / `<!-- topics:end -->` markers) and regenerates
+skills/abofles/references/matrix.md. `--check` writes nothing and exits 1 when
+either file is out of date.
 """
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKILL = ROOT / "skills/abofles/SKILL.md"
+TOPICS_MD = ROOT / "skills/abofles/references/topics.md"
 MATRIX = ROOT / "skills/abofles/references/matrix.md"
 
 SIDES = ["Read", "Analyse", "Plan", "Work", "Verify"]
@@ -364,9 +365,18 @@ def splice(text, start, end, body):
 
 
 if __name__ == "__main__":
-    skill = SKILL.read_text()
-    skill = splice(skill, "<!-- topics:start -->", "<!-- topics:end -->", build_index())
-    SKILL.write_text(skill)
-    MATRIX.write_text(build_matrix())
+    import sys
+
+    new_topics = splice(TOPICS_MD.read_text(), "<!-- topics:start -->", "<!-- topics:end -->", build_index())
+    new_matrix = build_matrix()
+    if "--check" in sys.argv[1:]:
+        stale = [p.name for p, new in ((TOPICS_MD, new_topics), (MATRIX, new_matrix)) if p.read_text() != new]
+        if stale:
+            print("stale: " + ", ".join(stale) + " (run gen_matrix.py)")
+            sys.exit(1)
+        print("ok: up to date")
+        sys.exit(0)
+    TOPICS_MD.write_text(new_topics)
+    MATRIX.write_text(new_matrix)
     count = sum(len(r) for _, _, r in TOPICS)
-    print(f"ok: {count} topics, {len(TOPICS)} groups -> {SKILL.name}, {MATRIX.name}")
+    print(f"ok: {count} topics, {len(TOPICS)} groups -> {TOPICS_MD.name}, {MATRIX.name}")

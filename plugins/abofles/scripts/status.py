@@ -107,11 +107,20 @@ def main():
 
     if "--resolve" in args:
         key = args[args.index("--resolve") + 1]
-        f = ledger_files(False)[-1]  # this project's session
+        if "--session" in args:  # the guide band names the session whose ledger row it settles
+            f = LEDGER_DIR / f"{args[args.index('--session') + 1]}.jsonl"
+            if not f.exists():
+                print(f"abofles: no ledger for session {f.stem}")
+                sys.exit(1)
+        else:
+            f = ledger_files(False)[-1]  # this project's session
         rows = [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
         hit = [r for r in rows if (r.get("agent_id") or "").startswith(key)]
         if not hit:
             print(f"abofles: no follow-up with agent id starting '{key}' in {f.name}")
+            sys.exit(1)
+        if all(r.get("resolved") for r in hit):
+            print(f"abofles: already resolved ({key}…)")
             return
         for r in hit:
             r["resolved"] = True

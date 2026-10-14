@@ -44,6 +44,8 @@ def main():
             return
         hit = memo_resolve(cwd, int(args[1]), " ".join(args[2:]))
         print(f"resolved: {hit}" if hit else f"abofles: no open item {args[1]} in Needs you ({memo_path(cwd)})")
+        if not hit:
+            sys.exit(1)
     elif cmd == "note":
         text = " ".join(args[1:]).strip()
         if not text:
