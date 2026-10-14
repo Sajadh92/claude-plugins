@@ -6,7 +6,7 @@ allowed-tools: Read, Glob, Grep, Edit, Write
 
 Set up Abo Fles for this project. Arguments: $ARGUMENTS
 
-1. If `CLAUDE.md` in the project root already has a `## abofles overrides` block, show it and stop — say the user can edit it by hand.
+1. If `CLAUDE.md` in the project root already has a `## abofles overrides` block, show it and stop — say the user can edit it by hand. The hooks read overrides only from that block; a `- Key = value` line elsewhere in the file is ignored.
 
 2. Scan the project quickly (Glob/Grep, or read-only shell search such as `grep`, `find`, `ls` when those tools are not exposed; no subagents, no file writes). Project memory (auto-memory notes, `CLAUDE.md` history) may support a suggestion but never replace the scan: the topic must show up in the code, and a line that leans on memory says so — `(scan + project memory: ES silent-failure history)`. Look for money, payment, wallet, balance, invoice, commission, tax, auth, token, password, tenant, PII, migration. Also note the stack (languages, frameworks, test runner) from the manifest files you find.
 
@@ -40,6 +40,6 @@ Set up Abo Fles for this project. Arguments: $ARGUMENTS
 - Guide = on | off
 ```
 
-Suggest only the lines the scan justifies; the last six are listed so the user knows they exist.
+Suggest only the lines the scan justifies; the lines from `Receipt` on are listed so the user knows they exist.
 
 Suggest `Context marks` only when the user said the project runs on a model with a small window (then `100, 150, 180`); never suggest `Session cap` unasked. Keep only the lines you suggested; an empty block with just the heading is valid and means "matrix as is". Tell the user the file path and that abofles reads this block before every route.

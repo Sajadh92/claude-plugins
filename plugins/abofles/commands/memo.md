@@ -5,7 +5,7 @@ allowed-tools: Bash(python3 *), Bash(git *)
 
 Update the memo's **Now** section for this session, then tell the user to run `/compact`.
 
-The memo lives at `.claude/abofles-memo.md` in the project root — the directory the session started in, whatever `cd` happened since (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memo.py" path` prints it). The hook stamps the Now section with the time it was written; the resume block shows that age. Its other sections — **Journal** (one line per receipt), **Needs you** (ATTENTION, FAIL, owner decisions) and **Decisions** (every question you asked and the answer) — are kept by the hooks; never rewrite them.
+The memo lives at `.claude/abofles-memo.md` in the project root — the directory the session started in, whatever `cd` happened since (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memo.py" path` prints it). The hook stamps the Now section with the time it was written; the resume block shows that age. The hooks also rewrite Now from each receipt (stamped `· from receipt`); this command writes the richer version before a compact. Its other sections — **Journal** (one line per receipt), **Needs you** (ATTENTION, FAIL, owner decisions) and **Decisions** (every question you asked and the answer) — are kept by the hooks; never rewrite them.
 
 1. Run `git status --short` first if the project is a git repository (first 20 lines go under `Tree`).
 

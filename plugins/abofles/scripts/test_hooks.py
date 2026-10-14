@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -333,7 +334,7 @@ def main():
         check("memo: needs-you gets ATTENTION + owner decision, not chain state", "1. [ ]" in txt and "ATTENTION: USD orders uncapped" in txt and "2. [ ]" in txt and "owner decision: cap per currency?" in txt and "FE #541" not in txt.split("## Decisions")[0].split("## Needs you")[1])
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="mm"), led)
         run("receipt", {"session_id": "mm", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": rtxt}, led)
-        check("memo: same open item not duplicated; journal newest first", mf.read_text().count("ATTENTION: USD orders uncapped") == 1 + 2 and mf.read_text().count("[ ]") == 2)
+        check("memo: same open item not duplicated; journal newest first", mf.read_text().count("ATTENTION: USD orders uncapped") == 1 + 2 + 2 and mf.read_text().count("[ ]") == 2)  # Needs you once, two journal lines, and the Now block's Left and Next
         # decision log from AskUserQuestion
         run("decision", {"session_id": "mm", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Cap in IQD only?", "options": []}]}, "tool_response": {"answers": {"Cap in IQD only?": "Yes, IQD only"}}}, led)
         check("memo: AskUserQuestion logged with answer", "Cap in IQD only? → Yes, IQD only" in mf.read_text())
@@ -376,7 +377,11 @@ def main():
         check("gate: spawn 2 allowed", run("pre", p1, led) is None)
         run("post", dict(p1, tool_response=good), led)
         out = run("pre", p1, led)
-        check("gate: spawn 3 denied (budget 2)", "agent budget is 2" in reason(out) and "2 already ran" in reason(out))
+        check("gate: spawn 3 denied (budget 2)", "agent budget is 2" in reason(out) and "2 already ran" in reason(out) and "no Judge" in reason(out))
+        bq = {"session_id": "ag", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Raise the agent budget to 4?", "options": []}]}}
+        check("gate: budget question after the deny needs no Judge", run("qgate", bq, led) is None)
+        bq2 = dict(bq, tool_input={"questions": [{"question": "Should the refund round half up?", "options": []}]})
+        check("gate: only one question per deny", "Judge" in reason(run("qgate", bq2, led)))
         check("gate: abofles:skip still bypasses", run("pre", dict(p1, tool_input=dict(p1["tool_input"], prompt="abofles:skip x")), led) is None)
         # receipt ends the task -> per-task answer expires -> gate asks again
         run("receipt", {"session_id": "ag", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **2 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y"}, led)
@@ -503,9 +508,9 @@ def main():
         check("receipt: sub-bullet items parsed into journal and Needs you", "done: a.cs: cap; b.cs: tests" in mf.read_text() and "subbullet alpha" in nb and "subbullet beta?" in nb)
         memo("now", inp="Task      t\nLeft      FE tests\nLeft      BE migration\n          docs page\nNext      n\n")
         check("resume: Now section stamped", "now written 20" in blk)
-        stf = Path(cwd, ".claude", "abofles-memo.md"); old = stf.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), time.strftime("Written   %Y-01-01 00:00")); stf.write_text(old)
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rt"), led)
         run("receipt", {"session_id": "rt", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": rtxt}, led)
+        stf = Path(cwd, ".claude", "abofles-memo.md"); old = stf.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), time.strftime("Written   %Y-01-01 00:00")); stf.write_text(old)  # a receipt rewrites Now itself: age it after the receipt
         blk = memo("show")
         check("resume: old Now shows its age and the receipts since", ("hours" in blk.splitlines()[0] or "day" in blk.splitlines()[0]) and "ago)" in blk and "- `since` → " in blk and "may be stale" in blk)
         # 5. a receipt closes the task even while a background agent of it still runs
@@ -554,7 +559,25 @@ def main():
         out = run("post", dict(jp(2, table_ask), session_id="ex", transcript_path=str(tr)), led)
         check("explain: table EXPLAIN -> print-above instruction", "needs markdown" in ctx(out) and json.loads(Path(state, "ex.json").read_text()).get("explain_md") is True)
         exq = dict(aq, session_id="ex", transcript_path=str(tr), tool_input={"questions": [{"question": "Cap per unit or per order? 📖 the full table is printed above this question", "options": []}]})
-        check("explain: the question passes at once (a PreToolUse hook cannot see the current message; refusals folded the text)", run("qgate", exq, led) is None and json.loads(Path(state, "ex.json").read_text()).get("explain_md") is False)
+        check("explain: the Explainer's own block is handed over to print verbatim", "verbatim" in ctx(out) and "| Per unit | capped |" in ctx(out) and "📖 **Explanation for the question below**" in ctx(out))
+        def say(kind, body):  # an assistant entry of the main thread, as Claude Code writes it before the tool call
+            with open(tr, "a") as fh:
+                fh.write(json.dumps({"type": "assistant", "message": {"id": f"m{time.time()}", "role": "assistant", "content": [{"type": kind, kind: body}]}}, ensure_ascii=False) + "\n")
+        say("thinking", "I will explain with a comparison table, then ask.")  # DCMP 2026-10-14: the table announced in thinking only
+        out = run("qgate", exq, led)
+        exs = json.loads(Path(state, "ex.json").read_text())
+        check("explain: question with no printed explanation refused once, the block handed back",
+              "not printed" in reason(out) and "| Per unit | capped |" in reason(out) and exs.get("explain_md") is True and exs.get("judge_ok") == 1)
+        say("text", "📖 **Explanation for the question below**\n\n| option | effect |\n|---|---|\n| Per unit | capped |")
+        check("explain: printed explanation -> the question passes", run("qgate", exq, led) is None and json.loads(Path(state, "ex.json").read_text()).get("explain_md") is False)
+        say("text", "the user answered in Other: no table here — print it, then ask again")
+        out = run("qgate", exq, led)  # re-ask within the window, no judge: the table only in thinking again
+        check("explain: a re-ask without the explanation printed again is refused once, block handed back", "not printed" in reason(out) and "| Per unit | capped |" in reason(out))
+        say("text", "📖 **Explanation for the question below**\n\n| option | effect |\n|---|---|\n| Per unit | capped |")
+        check("explain: re-ask with the explanation printed again passes", run("qgate", exq, led) is None)
+        out = run("post", dict(jp(2, table_ask), session_id="ex", transcript_path=str(tr)), led)
+        r1 = run("qgate", exq, led)
+        check("explain: a second miss goes through (one refusal per question, never a loop)", "not printed" in reason(r1) and run("qgate", exq, led) is None)
         out = run("post", dict(jp(2, ask), session_id="ex", transcript_path=str(tr)), led)
         check("explain: plain EXPLAIN -> inside-the-question instruction, no gate", "plain lines" in ctx(out) and run("qgate", exq, led) is None)
         # 6d. Stop: a judged, unasked question blocks the turn end once
@@ -600,8 +623,12 @@ def main():
         gp = lambda: run("guard", {"session_id": "pf", "cwd": cwd, "tool_name": "Read", "tool_input": {}}, led)
         outs = [ctx(gp()) for _ in range(8)]
         check("pace: fast guard speaks at 8, not 4", not any("direct reads" in o for o in outs[:7]) and "8 direct reads" in outs[7])
+        check("pace: fast -> tier still unknown (no spawn, no main tier) -> judged", "question gate" in reason(run("qgate", dict(aq, session_id="pf"), led)))
+        json.dump(dict(json.loads(Path(state, "pf.json").read_text()), task_tier_max=2), open(Path(state, "pf.json"), "w"))
         check("pace: fast -> Normal question passes unjudged", run("qgate", dict(aq, session_id="pf"), led) is None)
-        json.dump(dict(json.loads(Path(state, "pf.json").read_text()), task_tier_max=3), open(Path(state, "pf.json"), "w"))
+        json.dump(dict(json.loads(Path(state, "pf.json").read_text()), task_tier_max=0, main_tier=4, last_ask_ts=0, asked=[]), open(Path(state, "pf.json"), "w"))
+        check("pace: fast -> a T4 question before any spawn (main tier only) is judged", "question gate" in reason(run("qgate", dict(aq, session_id="pf", tool_input={"questions": [{"question": "Drop the legacy ledger table?", "options": []}]}), led)))
+        json.dump(dict(json.loads(Path(state, "pf.json").read_text()), task_tier_max=3, main_tier=None), open(Path(state, "pf.json"), "w"))
         check("pace: fast -> Sensitive question still judged", "question gate" in reason(run("qgate", dict(aq, session_id="pf", tool_input={"questions": [{"question": "Refund the full amount or the fee only?", "options": []}]}), led)))
         out = run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="pf"), led)
         check("pace: fast -> short receipt by default", "one plain-markdown line" in ctx(out))
@@ -639,12 +666,38 @@ def main():
         fi = (gst.get("items") or [{}])[0]
         check("guide: an open FAIL item carries the Use prompt and the resolve command",
               fi.get("p") == "🔴" and fi.get("fill", "").startswith("abofles: open FAIL on Unit Test (agent vf1abc) — fix it in the main session when ≤ 3 calls")
-              and fi.get("resolve") == [sys.executable, str(Path(__file__).resolve().parent / "status.py"), "--resolve", "vf1abc", "--session", "gu"])
+              and fi.get("resolve") is None and fi.get("unresolve") is None)
+        check("guide: an open FAIL has no blind resolve, a recheck prompt with the traced resolve command",
+              fi.get("recheck", "").startswith("abofles: re-check the open FAIL on Unit Test (agent vf1abc)") and "--resolve vf1abc --session gu --trace" in fi["recheck"] and "re-checked: <evidence>" in fi["recheck"])
         out = run("post", dict(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Unit Test / Verify · T2\nq\nLine cap: 20", resp="STATUS: done\nCONFIDENCE: high\nVERDICT: PASS\nEVIDENCE:\n- tests: 13 passed\nISSUES: none", cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
         check("guide: a later PASS on the topic closes the FAIL", "🔴 open FAIL" not in ctx(out))
         time.sleep(1.1)  # rows of the task are those after its start second
-        out = run("post", dict(agent("haiku", "low", resp="STATUS: partial\nCONFIDENCE: medium\nFACTS:\n- src/a.cs:1 — x\nGAPS: the Q2 method body was not read", cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
+        out = run("post", dict(agent("haiku", "low", resp={"agentId": "es1abc", "content": "STATUS: partial\nCONFIDENCE: medium\nFACTS:\n- src/a.cs:1 — x\nGAPS: the Q2 method body was not read"}, cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
         check("guide: an unescalated partial names the next setting", "🟡 escalate · Read Haiku 5.5 · Low came back partial/medium — re-run that subtask at Haiku 5.5 · Medium" in ctx(out))
+        yi = next((i for i in (json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items", []) if i["p"] == "🟡"), {})
+        STx = Path(__file__).resolve().parent / "status.py"
+        check("guide: an escalate item resolves with a --trace and unresolves through status.py",
+              yi.get("resolve", [])[1:] == [str(STx), "--resolve", "es1abc", "--session", "gu", "--trace", yi.get("resolve", ["", "", "", "", "", "", ""])[-1]] and yi["resolve"][-1].startswith("Read ")
+              and (yi.get("unresolve") or [])[:7] == [sys.executable, str(STx), "--unresolve", "es1abc", "--session", "gu", "--trace"] and yi.get("recheck") is None)
+        genv = dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)
+        rr = _sp.run(yi["resolve"], cwd=cwd, capture_output=True, text=True, env=genv)
+        check("trace: status --resolve --trace settles the row", rr.returncode == 0 and "resolved 1 entry" in rr.stdout)
+        check("trace: one resolved-by-hand line in the Journal with the session tag", len([l for l in mf.read_text().splitlines() if "· s:gu · resolved by hand: escalate · Unit Test · Read " in l and l.count("escalate") == 1]) == 1)
+        check("trace: the resume block does not list a hand-trace under last and counts no receipt for it", "resolved by hand: escalate" not in memo("show").split("- `last`")[-1] and "- `since` → 1 receipt" not in memo("show"))
+        gout = _sp.run([sys.executable, str(GU := Path(__file__).resolve().parent / "guide.py"), "--all"], cwd=cwd, capture_output=True, text=True, env=genv).stdout
+        check("trace: a resolved escalate leaves the guide", "🟡 escalate" not in gout)
+        ur = _sp.run(yi["unresolve"], cwd=cwd, capture_output=True, text=True, env=genv)
+        check("trace: status --unresolve reopens the row", ur.returncode == 0 and "reopened 1 entry" in ur.stdout)
+        gout = _sp.run([sys.executable, str(GU), "--all"], cwd=cwd, capture_output=True, text=True, env=genv).stdout
+        check("trace: the guide shows the escalate again", "🟡 escalate" in gout)
+        ur2 = _sp.run(yi["unresolve"], cwd=cwd, capture_output=True, text=True, env=genv)
+        check("trace: unresolve of an open row exits 3", ur2.returncode == 3 and "not resolved" in ur2.stdout)
+        ur3 = _sp.run([sys.executable, str(STx), "--unresolve", "nope", "--session", "gu"], cwd=cwd, capture_output=True, text=True, env=genv)
+        check("trace: unresolve miss exits 1", ur3.returncode == 1)
+        _sp.run(yi["resolve"][:-2] + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
+        _sp.run(yi["unresolve"] + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
+        check("trace: --unresolve --trace writes reopened by hand", "· s:gu · reopened by hand: escalate · Unit Test" in mf.read_text())
+        _sp.run(yi["unresolve"], cwd=cwd, capture_output=True, text=True, env=genv)
         out = run("receipt", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "🧾 **3 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y\n- `open` → owner decision: cap per currency?"}, led)
         run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "source": "resume"}, led)
         blk = run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "source": "resume"}, led)
@@ -655,9 +708,16 @@ def main():
         od = ((json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items") or [{}])[0]
         check("guide: an owner decision item asks the user after judging, and resolves through memo.py",
               od.get("p") == "🟠" and od.get("fill", "").startswith("abofles: owner decision 1 is open: ") and od["fill"].endswith("Judge it first, then ask me with AskUserQuestion.")
-              and od.get("resolve") == [sys.executable, str(Path(__file__).resolve().parent / "memo.py"), "resolve", "1", "settled from the guide band"])
+              and od.get("resolve") == [sys.executable, str(Path(__file__).resolve().parent / "memo.py"), "resolve", "1", "settled from the guide band", "--trace", "--session", "gu"]
+              and od.get("unresolve") == [sys.executable, str(Path(__file__).resolve().parent / "memo.py"), "reopen", "1", "--trace", "--session", "gu"] and od.get("recheck") is None)
         rout = _sp.run(od["resolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)).stdout
         check("guide: running the owner decision's resolve command ticks it in the memo", rout.startswith("resolved:") and "1. [x]" in mf.read_text())
+        check("trace: memo resolve --trace journals the owner decision", any("resolved by hand: owner decision 1: " in l and "(s:" not in l.split("by hand:")[1] for l in mf.read_text().splitlines()))
+        rop = _sp.run(od["unresolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
+        check("memo reopen: item is open again and the resolve note is gone", rop.returncode == 0 and any(l.startswith("1. [ ] ") and "→ resolved" not in l for l in mf.read_text().splitlines()))
+        rop = _sp.run(od["unresolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
+        check("memo reopen: an open item exits 3", rop.returncode == 3)
+        _sp.run(od["resolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
         out = run("post", dict(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Unit Test / Verify · T2\nq\nLine cap: 20", resp="STATUS: done\nCONFIDENCE: high\nVERDICT: FAIL\nEVIDENCE:\n- tests: 1 failed\nISSUES:\n- src/b.cs:3 — null", cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
         check("guide: a FAIL of the open task is shown", "🔴 open FAIL · Unit Test" in ctx(out))
         time.sleep(1.1)  # the receipt closes the task in a later second than its rows
@@ -764,6 +824,204 @@ def main():
         check("ledger: bad path logged low", rows[4]["confidence"] == "low" and rows[4]["bad_paths"] == ["src/Rules/a.cs"])
         check("ledger: reply_chars present", all("reply_chars" in r for r in rows))
         check("ledger: verdicts logged", rows[7]["verdict"] == "FAIL" and rows[8]["verdict"] == "PASS" and rows[8]["attention"] is True)
+
+        # ── T3 batch: memo Now follows the receipt; explain gate; prompt dirs; lock pruning; overrides block; next setting; guide ids ──
+        import importlib.util as _iu
+        _hs = _iu.spec_from_file_location("abofles_hook_t3", str(HOOK)); H = _iu.module_from_spec(_hs); _hs.loader.exec_module(H)
+        gstate = lambda sid_: json.loads(Path(state, f"{sid_}.json").read_text())
+        gitems = lambda sid_: (gstate(sid_).get("guide") or {}).get("items") or []
+        RC1 = "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → capped the surcharge in AqsatiRules.cs\n- `why` → money rule\n- `check` → `dotnet test` → 13 passed\n- `open` →\n  - wire the FE badge\n  - update the docs page"
+        # 1. memo Now rewritten by the receipt
+        pa = tempfile.mkdtemp(); sA = "autosess1"
+        run("start", {"session_id": sA, "cwd": pa}, led)
+        H.memo_now(pa, "Task      old task\nDone      old done\nLeft      old left\nDecisions keep: tables are printed above the box\nNext      old next\nVerify    old verify\nTree      M old.cs", sA)
+        run("receipt", {"session_id": sA, "cwd": pa, "stop_hook_active": False, "last_assistant_message": RC1}, led)
+        nowA = H.memo_read(pa)["Now"]
+        check("now auto: a receipt rewrites this session's Now (between tasks, Done, Left lines, Next = first open item, Verify)",
+              "Task      none — between tasks" in nowA and "Done      capped the surcharge in AqsatiRules.cs" in nowA and "Left      wire the FE badge\nLeft      update the docs page" in nowA
+              and "Next      wire the FE badge" in nowA and "Verify    `dotnet test` → 13 passed" in nowA and "old left" not in nowA and "old next" not in nowA and "old done" not in nowA)
+        check("now auto: Decisions kept unchanged, Tree kept outside git, block marked from receipt",
+              "Decisions keep: tables are printed above the box" in nowA and "Tree      M old.cs" in nowA and re.search(r"Written   \d{4}-\d\d-\d\d \d\d:\d\d · from receipt", nowA))
+        nx_ = next((i for i in gitems(sA) if i.get("id") == "next"), {})
+        check("now auto: the band's next item shows the new Next in the same Stop", "next from the memo: wire the FE badge" in nx_.get("text", "") and gstate(sA)["guide"]["items"][0]["p"] == "✅")
+        blkA = H.resume_block(pa, session_id=sA)
+        check("now auto: resume block reads the receipt-stamped Now (no 'since' stale line, left and next shown)", "now written " in blkA and "from receipt" in blkA and "- `since`" not in blkA and "- `next` → wire the FE badge" in blkA)
+        run("receipt", {"session_id": sA, "cwd": pa, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5 · open: none"}, led)
+        nowA2 = H.memo_read(pa)["Now"]
+        check("now auto: short receipt with open none -> no Left, Next ready, Done/Verify/Decisions kept",
+              "Left" not in nowA2 and "Next      none — ready for the next task" in nowA2 and "capped the surcharge" in nowA2 and "13 passed" in nowA2 and "Decisions keep:" in nowA2)
+        nx_ = next((i for i in gitems(sA) if i.get("id") == "next"), {})
+        check("now auto: Next 'none…' -> the band says pick the next ticket", nx_.get("text") == "nothing open — pick the next ticket and route it with abofles first")
+        pg = tempfile.mkdtemp()
+        if subprocess.run(["git", "init", "-q"], cwd=pg, capture_output=True).returncode == 0:
+            Path(pg, "a.txt").write_text("x")
+            run("start", {"session_id": "autogit1", "cwd": pg}, led)
+            run("receipt", {"session_id": "autogit1", "cwd": pg, "stop_hook_active": False, "last_assistant_message": RC1}, led)
+            check("now auto: Tree = git status --short of the project root", "Tree      ?? a.txt" in H.memo_read(pg)["Now"])
+            Path(pg, "a.txt").unlink()
+            run("receipt", {"session_id": "autogit1", "cwd": pg, "stop_hook_active": False, "last_assistant_message": RC1}, led)
+            check("now auto: Tree = clean when git status is empty", "Tree      clean" in H.memo_read(pg)["Now"])
+        # the 'memo Now is old' item goes away right after a receipt
+        pb = tempfile.mkdtemp(); sB = "agesess01"
+        run("start", {"session_id": sB, "cwd": pb}, led)
+        run("receipt", {"session_id": sB, "cwd": pb, "stop_hook_active": False, "last_assistant_message": RC1}, led)
+        stb = Path(pb, ".claude", "abofles-memo.md"); stb.write_text(stb.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), "Written   2020-01-01 00:00"))
+        run("prompt", {"session_id": sB, "cwd": pb}, led)
+        check("now auto: an old Now with receipts since still raises the memo-age item", "memo-age" in [i.get("id") for i in gitems(sB)])
+        run("receipt", {"session_id": sB, "cwd": pb, "stop_hook_active": False, "last_assistant_message": RC1}, led)
+        check("now auto: ... and the next receipt makes it disappear", "memo-age" not in [i.get("id") for i in gitems(sB)])
+        # 2. explanation gate
+        run("start", {"session_id": "xa", "cwd": cwd, "transcript_path": str(tr)}, led)
+        json.dump(dict(gstate("xa"), gate="auto"), open(Path(state, "xa.json"), "w"))
+        xj = lambda resp: dict(jp(2, resp), session_id="xa", transcript_path=str(tr))
+        xq = lambda q: dict(aq, session_id="xa", transcript_path=str(tr), tool_input={"questions": [{"question": q, "options": []}]})
+        TBL = "📖 **Explanation for the question below**\n\n| option | effect |\n|---|---|\n| Per unit | capped |"
+        XQ1 = "Cap per unit or per order? 📖 the full table is printed above this question"
+        run("post", xj(table_ask), led)
+        say("text", TBL)
+        check("explain gate: a printed markdown round passes and is kept as explain_prev", run("qgate", xq(XQ1), led) is None and (gstate("xa").get("explain_prev") or {}).get("text"))
+        run("post", xj(ask), led)  # a new judged question, plain EXPLAIN
+        check("explain gate (a): a new judged plain question passes and drops the old explain_prev", run("qgate", xq("Which branch do we merge into first?"), led) is None and not gstate("xa").get("explain_prev"))
+        check("explain gate (a): its re-ask is not asked to print the old table", run("qgate", xq("Into which branch do we merge first, then?"), led) is None)
+        run("post", xj(table_ask), led)
+        say("text", TBL)
+        run("qgate", xq(XQ1), led)
+        say("text", "the user answered in Other: print the table again")
+        run("sendmsg", {"session_id": "xa", "cwd": cwd, "transcript_path": str(tr), "tool_name": "SendMessage", "tool_input": {"to": "abofles-explainer", "message": "same round, reworded"}}, led)
+        out = run("qgate", xq("Cap per unit or per order (translated)? 📖 the table is above"), led)
+        check("explain gate (b): a re-ask unlocked by SendMessage is refused until the table is printed again, block handed back", "not printed" in reason(out) and "| Per unit | capped |" in reason(out))
+        run("start", {"session_id": "xc", "cwd": cwd, "transcript_path": str(tr)}, led)
+        json.dump(dict(gstate("xc"), gate="auto"), open(Path(state, "xc.json"), "w"))
+        run("post", dict(agent("sonnet", "medium", "abofles:abofles-judge", prompt="abofles: X / Judge · T2\nq\nLine cap: 40", resp={"status": "async_launched", "agentId": "bjx", "prompt": "p", "description": "t"}, cwd=cwd), session_id="xc", transcript_path=str(tr)), led)
+        run("stop", {"session_id": "xc", "agent_id": "bjx", "last_assistant_message": table_ask}, led)
+        check("explain gate (c): a background judge reply arms the explain state like post() does", gstate("xc").get("explain_md") is True and "| Per unit | capped |" in gstate("xc").get("explain_text", "") and gstate("xc").get("judge_ok") == 1)
+        out = run("qgate", dict(xq("Cap per unit or per order?"), session_id="xc"), led)
+        check("explain gate (c): ... so the unprinted table is refused once", "not printed" in reason(out))
+        run("start", {"session_id": "xc", "cwd": cwd, "transcript_path": str(tr)}, led)
+        check("explain gate (d): a new task clears every explain key, explain_prev included", not any(k in gstate("xc") for k in ("explain_md", "explain_text", "explain_offset", "explain_denies", "explain_prev")))
+        EXq = "STATUS: done\nVERDICT: ASK\nQUESTION: q1\nEXPLAIN:\n| a | b |\n|---|---|\n| 1 | 2 |\nVERDICT: ASK\nQUESTION: q2\nWHY: w2"
+        check("explain gate (e): EXPLAIN ends at the next VERDICT line", H.explain_block(EXq) == "| a | b |\n|---|---|\n| 1 | 2 |")
+        fenced = "EXPLAIN:\n```\nA -> B\nB -> C\n```"
+        check("explain gate (e): a fenced EXPLAIN keeps its fence and counts as markdown", H.explain_block(fenced) == "```\nA -> B\nB -> C\n```" and H.explain_needs_markdown(fenced))
+        check("explain gate (e): one inline-code wrap of a one-line text is removed, two code spans stay", H.explain_block("EXPLAIN: `use the cap`") == "use the cap" and H.explain_block("EXPLAIN: `a` and `b`") == "`a` and `b`")
+        cutx = H.explain_cut("```\n" + "row\n\n" * 3000)
+        check("explain gate (f): a long EXPLAIN is cut at a blank line and the open fence closed", len(cutx) <= 6004 and cutx.endswith("\n```") and cutx[:-4].endswith("row") and H.explain_cut("short") == "short")
+        # 3. prompt_dirs
+        pdd = tempfile.mkdtemp(); os.makedirs(os.path.join(pdd, "my proj", "wt")); os.makedirs(os.path.join(pdd, "plain", "tree2"))
+        wsp = os.path.join(pdd, "my proj", "wt")
+        check("prompt_dirs: an unquoted dir with a space in it is found whole", H.prompt_dirs(f"Working tree: {wsp} then read x.cs") == [wsp])
+        check("prompt_dirs: quoted and backticked dirs are found", H.prompt_dirs(f'in "{wsp}" and `{pdd}/plain/tree2`.') == [wsp, f"{pdd}/plain/tree2"])
+        check("prompt_dirs: a plain dir with a trailing dot still works", H.prompt_dirs(f"Working tree: {pdd}/plain/tree2.") == [f"{pdd}/plain/tree2"])
+        # 4. resume `last` lists receipts only
+        pr = tempfile.mkdtemp(); sR = "lastsess1"
+        for n in (1, 2, 3, 4):
+            H.memo_journal(pr, sR, H.parse_receipt(f"🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → built r{n}\n- `check` → ok"))
+        H.memo_trace(pr, sR, "resolved by hand: escalate · X")
+        lastpart = H.resume_block(pr, session_id=sR).split("- `last`")[1]
+        check("resume last: the newest 3 receipts, no hand-trace line", lastpart.count("\n  - ") == 3 and "built r4" in lastpart and "built r2" in lastpart and "built r1" not in lastpart and "by hand" not in lastpart)
+        # 5. memo_resolve / memo_reopen pass the session on
+        H.memo_needs(pr, "needsess1", "owner decision: pick A or B")
+        H.memo_resolve(pr, 1, "ok", "ressess01")
+        check("memo_resolve: the memo header carries the given session", "· session ressess0" in H.memo_path(pr).read_text().splitlines()[1])
+        H.memo_reopen(pr, 1, "reopsess1")
+        check("memo_reopen: the memo header carries the given session", "· session reopsess" in H.memo_path(pr).read_text().splitlines()[1])
+        # 6. stale lock files are pruned at SessionStart
+        ml_dir = Path(state, "memo-locks"); ml_dir.mkdir(exist_ok=True)
+        lk_old, lk_new, lk_oldm = Path(state, "stale-sess.lock"), Path(state, "fresh-sess.lock"), ml_dir / "stale_proj.lock"
+        for f in (lk_old, lk_new, lk_oldm):
+            f.write_text("")
+        for f in (lk_old, lk_oldm):
+            os.utime(f, (time.time() - 8 * 86400,) * 2)
+        run("start", {"session_id": "lk", "cwd": cwd}, led)
+        check("start: lock files older than 7 days are deleted (state and memo-locks), fresh ones stay", not lk_old.exists() and not lk_oldm.exists() and lk_new.exists())
+        # 7. refresh_guide reads the transcript once
+        calls = []
+        orig_cs = H.context_state
+        H.context_state = lambda root_, st_: (calls.append(1), (None, None))[1]
+        try:
+            H.refresh_guide(pr, {}, "cnt_sess")
+        finally:
+            H.context_state = orig_cs
+        check("refresh_guide: context_state computed once (no second transcript tail read)", len(calls) == 1)
+        # 9. overrides are read only inside the overrides block
+        po = tempfile.mkdtemp()
+        Path(po, "CLAUDE.md").write_text("# Project\n- Pace = fast\n- Receipt = off\n\n### Abofles Overrides\n- Break = 7\n#### notes\n- Guide = off\n\n## Other\n- Language = Arabic\n")
+        check("override_value: read inside the block (any heading level and case; a deeper heading continues it)", H.override_value(po, "Break") == "7" and H.override_value(po, "Guide") == "off")
+        check("override_value: a `- Key = value` line outside the block sets nothing", H.override_value(po, "Pace") is None and H.override_value(po, "Receipt") is None and H.override_value(po, "Language") is None)
+        # 10. the gate text says what the question text holds
+        qt = H.question_gate_text({})
+        check("question gate text: question text = QUESTION, blank line, WHY (no option summary); no 'plain summary'", "plain summary" not in qt and "QUESTION, a blank line, WHY (no option summary)" in qt)
+        # 11. next setting stops at the top unless T4
+        check("next_setting: Work stops at opus·xhigh (max only on T4)", H.next_setting("opus", "xhigh", "Work", 3) == (None, None) and H.next_setting("opus", "xhigh", "Work", 4) == ("opus", "max") and H.next_setting("opus", "max", "Work", 4) == (None, None))
+        check("next_setting: Analyse/Plan reach fable, max only after fable·high on T4",
+              H.next_setting("opus", "xhigh", "Plan", 3) == ("fable", "medium") and H.next_setting("fable", "xhigh", "Plan", 3) == (None, None)
+              and H.next_setting("fable", "high", "Analyse", 4) == ("fable", "xhigh") and H.next_setting("fable", "xhigh", "Plan", 4) == ("fable", "max"))
+        check("next_setting: the lower ladder is unchanged", H.next_setting("haiku", "low", "Read", 2) == ("haiku", "medium") and H.next_setting("sonnet", "xhigh", "Work", 2) == ("opus", "medium"))
+        for sx_, tx_ in (("nx", 3), ("nx4", 4)):
+            run("start", {"session_id": sx_, "cwd": cwd}, led)
+        time.sleep(1.1)  # escalation rows are those after the task start second
+        for sx_, tx_, ag_ in (("nx", 3, "wkx111"), ("nx4", 4, "wkx444")):
+            run("post", dict(agent("opus", "xhigh", "abofles:abofles-worker", prompt=f"abofles: Cap / Work · T{tx_}\nq\nLine cap: 20", resp={"agentId": ag_, "content": "STATUS: partial\nCONFIDENCE: low\nCHANGED:\n- a\nRAN: none\nLEFT: the Q2 body was not read"}, cwd=cwd), session_id=sx_), led)
+        e3 = next((i for i in gitems("nx") if i["p"] == "🟡"), {})
+        e4 = next((i for i in gitems("nx4") if i["p"] == "🟡"), {})
+        check("guide: an escalate at the top setting (T3) says stop and report, no max setting", "stop and report" in e3.get("text", "") and "Max" not in e3.get("text", "") and "stop and report" in e3.get("fill", ""))
+        check("guide: the same on T4 offers Opus 5.5 · Max", "Opus 5.5 · Max" in e4.get("text", ""))
+        check("guide: escalate text names the agent and carries id esc:<agent>", e3.get("id") == "esc:wkx111" and "agent wkx111" in e3.get("text", "") and e4.get("id") == "esc:wkx444" and "agent wkx444" in e4.get("text", ""))
+        # 12. guide item ids
+        pi_ = tempfile.mkdtemp(); sI = "idsess1"; tri = Path(pi_, "t.jsonl")
+        tri.write_text(json.dumps({"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": 460000, "output_tokens": 5}}}) + "\n")
+        Path(pi_, "CLAUDE.md").write_text("## abofles overrides\n- Agents = 1\n")
+        run("start", {"session_id": sI, "cwd": pi_, "transcript_path": str(tri)}, led)
+        H.memo_needs(pi_, sI, "owner decision: pick A or B?")
+        time.sleep(1.1)
+        iv = lambda extra: dict(extra, session_id=sI, transcript_path=str(tri))
+        run("post", iv(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Ids Topic / Verify · T2\nq\nLine cap: 20", resp={"agentId": "vfx111", "content": "STATUS: done\nCONFIDENCE: high\nVERDICT: FAIL\nEVIDENCE:\n- c1 — FAIL — src/a.cs:1\nISSUES:\nNOTE: none"}, cwd=pi_)), led)
+        run("post", iv(jp(2, ask)), led)
+        run("post", iv(agent("haiku", "low", resp={"status": "async_launched", "agentId": "bgx111", "prompt": "p", "description": "t"}, cwd=pi_)), led)
+        run("prompt", {"session_id": sI, "cwd": pi_, "transcript_path": str(tri)}, led)
+        iditems = {i["id"]: i for i in gitems(sI)}
+        check("guide ids: fail:<agent>, ask, dec:<n>, bg:<agent>, ctx:<mark>, budget on their items", {"fail:vfx111", "ask", "dec:1", "bg:bgx111", "ctx:500", "budget"} <= set(iditems))
+        check("guide ids: the owner-decision resolve/reopen argv carries --session <sid>", (iditems.get("dec:1", {}).get("resolve") or [])[-2:] == ["--session", sI] and (iditems.get("dec:1", {}).get("unresolve") or [])[-2:] == ["--session", sI])
+
+    # scripts: status.py / memo.py exit codes
+    with tempfile.TemporaryDirectory() as xh, tempfile.TemporaryDirectory() as xp:
+        sdir = Path(__file__).resolve().parent
+        xenv = dict(os.environ, HOME=xh, ABOFLES_LEDGER_DIR=str(Path(xh, "led")), ABOFLES_STATE_DIR=str(Path(xh, "st")))
+        Path(xh, "led").mkdir(); Path(xh, "st").mkdir()
+        st_ = lambda *a: subprocess.run([sys.executable, str(sdir / "status.py"), *a], cwd=xp, capture_output=True, text=True, env=xenv)
+        me_ = lambda *a: subprocess.run([sys.executable, str(sdir / "memo.py"), *a], cwd=xp, capture_output=True, text=True, env=xenv)
+        check("exit: status --resolve with no ledger at all exits 1", st_("--resolve", "abc").returncode == 1)
+        lf = Path(xh, "led", "xs.jsonl")
+        lf.write_text('{"agent_id": "abc123", "status": "partial"}\nHALF{"agent_id":"abc9\n{"agent_id": "abd1", "status": "blocked"}\n')
+        check("exit: status --resolve as the last arg exits 2", st_("--resolve").returncode == 2)
+        check("exit: status --resolve with an empty id exits 2", st_("--resolve", "", "--session", "xs").returncode == 2)
+        check("exit: status --resolve with a flag as id exits 2", st_("--resolve", "--trace").returncode == 2)
+        check("exit: status --session without a value exits 2", st_("--resolve", "abc", "--session").returncode == 2)
+        check("exit: status --unresolve with an empty session exits 2", st_("--unresolve", "abc", "--session", "").returncode == 2)
+        check("exit: status --session ../ is cleaned to a name in the ledger dir (no such ledger, exit 1)", st_("--resolve", "abc", "--session", "../../nope").returncode == 1 and not Path(xh, "nope.jsonl").exists())
+        r1 = st_("--resolve", "abc1", "--session", "xs", "--trace", "by test")
+        txt = lf.read_text().splitlines()
+        check("exit: status --resolve exits 0, marks the row, keeps the half-written line verbatim",
+              r1.returncode == 0 and json.loads(txt[0]).get("resolved") is True and txt[1] == 'HALF{"agent_id":"abc9' and json.loads(txt[2]) == {"agent_id": "abd1", "status": "blocked"})
+        mem = Path(xp, ".claude", "abofles-memo.md")
+        check("exit: status --resolve --trace wrote one Journal line", mem.read_text().count("resolved by hand:") == 1)
+        r2 = st_("--resolve", "abc1", "--session", "xs", "--trace")
+        check("exit: status --resolve of a resolved row exits 3, writes no trace", r2.returncode == 3 and mem.read_text().count("resolved by hand:") == 1)
+        check("exit: status --resolve miss exits 1", st_("--resolve", "zzz", "--session", "xs").returncode == 1)
+        check("exit: status --unresolve exits 0", st_("--unresolve", "abc1", "--session", "xs").returncode == 0 and "resolved" not in json.loads(lf.read_text().splitlines()[0]))
+        check("exit: status --unresolve of an open row exits 3, writes no trace", st_("--unresolve", "abc1", "--session", "xs", "--trace").returncode == 3 and "reopened by hand" not in mem.read_text())
+        # memo.py: Needs-you items through the hook's own writer
+        subprocess.run([sys.executable, "-c", "import sys,os; sys.path.insert(0, sys.argv[1]); import abofles_hook as h; h.memo_needs(os.getcwd(), 'sessAAAA', 'owner decision: pick A or B')", str(sdir.parent / "hooks")], cwd=xp, env=xenv)
+        check("exit: memo resolve without n exits 2", me_("resolve").returncode == 2 and me_("resolve", "x").returncode == 2)
+        check("exit: memo resolve --session without a value exits 2", me_("resolve", "1", "--session").returncode == 2 and me_("reopen", "1", "--session", "--trace").returncode == 2)
+        check("exit: memo reopen of an open item exits 3, writes no trace", me_("reopen", "1", "--trace").returncode == 3 and "reopened by hand" not in mem.read_text())
+        m1 = me_("resolve", "1", "note", "--trace", "--session", "mysess")
+        check("exit: memo resolve exits 0 and the trace carries the given session", m1.returncode == 0 and "· s:mysess · resolved by hand: owner decision 1" in mem.read_text())
+        n_ = mem.read_text().count("by hand:")
+        m2 = me_("resolve", "1", "--trace", "--session", "mysess")
+        check("exit: memo resolve of a resolved item exits 3, writes no trace", m2.returncode == 3 and mem.read_text().count("by hand:") == n_)
+        check("exit: memo resolve of a missing item exits 1", me_("resolve", "9").returncode == 1 and me_("reopen", "9").returncode == 1)
+        check("exit: memo reopen exits 0 with the given session", me_("reopen", "1", "--trace", "--session", "other").returncode == 0 and "· s:other · reopened by hand" in mem.read_text())
 
     print(f"\n{'ALL PASS' if not fails else f'{fails} FAILED'}")
     sys.exit(1 if fails else 0)

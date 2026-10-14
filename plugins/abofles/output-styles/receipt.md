@@ -41,6 +41,7 @@ A task that spawned agents and ends in a prose paragraph instead of the receipt 
 - `why` → <the reason or the rule that drove it, one line>
 - `check` → <the command that proves it → its decisive result>
 - `open` → <follow-ups — or "none">
+- `next` → 🧭 <the guide line the hook hands you, copy as given>
 
 A field with 2+ items (files, follow-ups) puts nothing after the arrow and lists each item as an indented sub-bullet (`  - <item>`), one idea per line. Never a long `;`-separated line — the reader scans, not reads.
 

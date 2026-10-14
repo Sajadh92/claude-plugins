@@ -8,6 +8,6 @@ Read when spawning in the background, when a model is unavailable, when the abof
 
 **The cell picks the model, not the agent type.** `abofles-reader` has read-only Bash (`git show`, `gh pr view`, grep), so most reads fit it. A read it cannot do — a connector such as Jira, a project agent — still takes the Read cell: `general-purpose` at `haiku·low`, never sonnet because the agent type changed.
 
-If the abofles agents are not available (skill copied without the plugin), fall back to `Explore` for Read, `Plan` for Plan, `general-purpose` for Analyse/Work/Verify, and paste the reply format from `references/matrix.md` into the prompt. Always pass `model` and `effort`.
+If the abofles agents are not available (skill copied without the plugin), fall back to `Explore` for Read, `Plan` for Plan, `general-purpose` for Analyse/Work/Verify, and paste the reply format from `agents/<side>.md` into the prompt. Always pass `model` and `effort`.
 
 **After a verifier FAIL** (Step 4): a known fix of ≤ 3 tool calls is applied by the main session (rule 7). Then re-verify **only the failed criterion**: run its command in the main session, or spawn Verify at −1 effort with that one criterion. A full re-verify at the original setting is only for a fix that touched more than the failed criterion.

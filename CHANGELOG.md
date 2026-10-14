@@ -2,6 +2,21 @@
 
 All notable changes to the plugins in this marketplace.
 
+## abofles 1.3.0 · abofles-guide 0.3.0 — 2026-10-15
+
+- abofles: after an agent-budget deny, one `AskUserQuestion` (raise the budget?) within 10 min goes to the user with no Judge — the budget question no longer needs a gate spawn; the deny text says so.
+- abofles: after every receipt the hook rewrites this session's memo Now block (Task `none — between tasks`, Done/Left/Next/Verify from the receipt, Decisions kept, Tree from git status; `· from receipt`); `/abofles:memo` still writes a richer one.
+- abofles: guide items carry a stable `id` (`fail:<agent>`, `dec:<n>`, `ctx:<mark>` …), the key for the band's hide and arm state; `next_setting` caps: Work/Verify stop at `opus·xhigh` except T4 (`opus·max`), and the 🟡 item says stop and report when no step is left.
+- abofles: explanation-gate fixes — `SendMessage` re-ask unlock, background judge, multi-`VERDICT` capture, fenced `EXPLAIN`, stale `explain_prev`, `EXPLAIN` cut at a blank line.
+- abofles: ledger rewrite locked and atomic; old lock files pruned; `prompt_dirs` paths with spaces; `/abofles:resume` `last` skips trace lines.
+- abofles: `status.py` / `memo.py` validate arguments (exit 2) and exit 3 when the item is already resolved / not resolved (no trace written); `memo.py resolve|reopen --session <sid>`.
+- abofles: `Pace = fast` judges by the open task's tier (spawns and `main:` line): skipped only for T1–T2, T3–T4 or unknown still judged; overrides are read only from the `## abofles overrides` block.
+- abofles-guide: running guard, arm expiry, one toast per new red item, safer state reads, more tests.
+- docs: broken `topics.md` link, root README lists abofles-guide, Receipt style `next` bullet, question-gate box vs. markdown `EXPLAIN`, command flags and exit codes, route `main:` form, worker `LEFT` rule.
+- abofles-guide: a 🔴 open FAIL or ATTENTION gets **Re-check** instead of Resolve — it fills a prompt to run only the failed criterion and resolve the row only if it passes; nothing is closed on trust. **Resolve** (🟡 escalate, 🟠 owner decision) asks twice: the first press arms it as `Confirm resolve` for 5 s. After a resolve the band shows `✓ resolved: …` with **Undo** until the turn ends.
+- abofles: a question whose explanation needs markdown can no longer reach the user without it. The hook hands the model the Explainer's own block to print verbatim, then checks the transcript when the question is asked and refuses it once if no explanation was printed — on the first ask and on a re-ask. Seen twice in DCMP on 2026-10-14: the model announced the table in its thinking only.
+- abofles: each guide item carries `recheck` and `unresolve`; `status.py --unresolve <id>`, `memo.py reopen <n>`; `--trace` on resolve and reopen writes one `resolved by hand` / `reopened by hand` line in the memo Journal, shown in the resume block (not counted as a receipt). The guide is recomputed on every prompt and right after a receipt adds owner decisions, so the band never lags a turn.
+
 ## abofles 1.2.0 · abofles-guide 0.2.0 — 2026-10-14
 
 - abofles: `SKILL.md` cut from 43 KB to 12 KB (about 8K fewer tokens per load); topic index, overrides, question gate, memo/guide, spawn details and the worked example moved to `references/*.md`, read on demand. `gen_matrix.py` writes the index to `references/topics.md`; `--check` added.

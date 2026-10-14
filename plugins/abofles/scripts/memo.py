@@ -3,7 +3,11 @@
 
     memo.py show                 the resume block (now · next · needs you · last receipts)
     memo.py show --all           the whole memo file
-    memo.py resolve <n> [note]   tick item n of "Needs you"
+    memo.py resolve <n> [note] [--trace] [--session <sid>]   tick item n of "Needs you" (--trace: one "resolved by hand" line in Journal)
+    memo.py reopen <n> [--trace] [--session <sid>]           turn a resolved item n back to open (drops the resolve note)
+      --session <sid> stamps the trace with that session instead of the newest one (two sessions in one root)
+      exit codes: 0 changed · 1 no such item · 2 usage (bad n, missing or empty --session value)
+                  · 3 nothing to change (already resolved / already open) — no trace line is written
     memo.py note <text>          add a user note to Decisions (something settled in chat)
     memo.py now < text           replace the Now section from stdin (what /abofles:memo writes)
     memo.py path                 print the memo path
@@ -13,11 +17,12 @@ receipts' `open` line) and Decisions (every AskUserQuestion with its answer). On
 the model, through `now`.
 """
 import os
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import memo_path, memo_now, memo_resolve, memo_decision, resume_block, newest_state, newest_state_path  # noqa: E402
+from abofles_hook import memo_path, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path  # noqa: E402
 
 
 def main():
@@ -38,14 +43,42 @@ def main():
             return
         block = resume_block(cwd, session_id=sid, guide=(st.get("guide") or {}).get("line"))
         print(block or "abofles: no memo yet — it is written at the first receipt, or by /abofles:memo.")
-    elif cmd == "resolve":
-        if len(args) < 2 or not args[1].isdigit():
-            print("usage: memo.py resolve <n> [note]")
-            return
-        hit = memo_resolve(cwd, int(args[1]), " ".join(args[2:]))
-        print(f"resolved: {hit}" if hit else f"abofles: no open item {args[1]} in Needs you ({memo_path(cwd)})")
+    elif cmd in ("resolve", "reopen"):
+        undo = cmd == "reopen"
+        usage = "usage: memo.py resolve <n> [note] [--trace] [--session <sid>]" if not undo else "usage: memo.py reopen <n> [--trace] [--session <sid>]"
+        rest, a_sid = [], None
+        i = 1
+        while i < len(args):  # --session takes a value; everything else that is not --trace is the note
+            if args[i] == "--session":
+                a_sid = args[i + 1] if i + 1 < len(args) else ""
+                if not a_sid.strip() or a_sid.startswith("--"):
+                    print(usage)
+                    sys.exit(2)
+                i += 2
+                continue
+            if args[i] != "--trace":
+                rest.append(args[i])
+            i += 1
+        if not rest or not rest[0].isdigit():
+            print(usage)
+            sys.exit(2)
+        n = rest[0]
+        if a_sid is not None:
+            sid = re.sub(r"[^A-Za-z0-9_-]", "", a_sid) or "unknown"
+        hit = memo_reopen(cwd, int(n)) if undo else memo_resolve(cwd, int(n), " ".join(rest[1:]))
         if not hit:
+            try:
+                already = any(l.startswith(f"{n}. [ ] " if undo else f"{n}. [x] ") for l in memo_read(cwd)["Needs you"].splitlines())
+            except Exception:
+                already = False
+            if already:
+                print(f"abofles: item {n} is already {'open' if undo else 'resolved'} ({memo_path(cwd)})")
+                sys.exit(3)
+            print(f"abofles: no {'resolved' if undo else 'open'} item {n} in Needs you ({memo_path(cwd)})")
             sys.exit(1)
+        print(f"{'reopened' if undo else 'resolved'}: {hit}")
+        if "--trace" in args:
+            memo_trace(cwd, sid, f"{'reopened' if undo else 'resolved'} by hand: owner decision {n}: " + re.sub(r"\s*\(s:[0-9a-z-]{1,12}\)\s*$", "", re.sub(r"^\d+\. \[.\] \S+ \S+ · (owner decision:\s*)?", "", hit)))
     elif cmd == "note":
         text = " ".join(args[1:]).strip()
         if not text:

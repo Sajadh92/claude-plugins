@@ -4,6 +4,10 @@
     status.py                       newest session ledger
     status.py --all                 every ledger
     status.py --resolve <agent_id>  mark one follow-up resolved (prefix match)
+    status.py --unresolve <agent_id>  reopen a follow-up marked resolved
+      both take --session <sid> and --trace [text]: one "resolved/reopened by hand" line in the memo Journal
+      exit codes: 0 changed · 1 no match / no ledger / error · 2 usage (missing or empty value)
+                  · 3 nothing to change (already resolved / not resolved) — no trace line is written
     status.py --baseline opus·high  compare against this model·effort (default opus·high)
 
 Follow-ups = ledger lines with status partial/blocked, confidence low, an
@@ -29,6 +33,13 @@ except Exception:  # pragma: no cover
     fmt_tokens = str
     fmt_usd = lambda x: f"${x:.2f}"
     PRICE_USD = {}
+try:
+    from abofles_hook import memo_trace, memo_path, state_path, ledger_path, state_lock
+except Exception:  # pragma: no cover
+    import contextlib
+    memo_trace = None
+    ledger_path = lambda sid: Path(os.environ.get("ABOFLES_LEDGER_DIR", Path.home() / ".abofles" / "ledgers")) / f"{re.sub(r'[^A-Za-z0-9_-]', '', sid or '') or 'unknown'}.jsonl"
+    state_lock = lambda sid: contextlib.nullcontext()
 
 LEDGER_DIR = Path(os.environ.get("ABOFLES_LEDGER_DIR", Path.home() / ".abofles" / "ledgers"))
 PRICE = {"haiku": 1, "sonnet": 20, "opus": 40, "fable": 100}
@@ -92,6 +103,102 @@ def bar(n, width=20, total=None):
     return "█" * max(1, round(width * n / total)) if n else ""
 
 
+USAGE = "usage: status.py --resolve <agent_id> | --unresolve <agent_id> [--session <sid>] [--trace [text]]"
+
+
+def flag_value(args, flag):
+    """The value after `flag`: (found, value). A missing, empty or `--`-led value is a usage error (value None)."""
+    if flag not in args:
+        return False, None
+    i = args.index(flag) + 1
+    v = args[i] if i < len(args) else ""
+    return True, (v if v.strip() and not v.startswith("--") else None)
+
+
+def settle(args):
+    """--resolve / --unresolve. Exit code: 0 changed, 1 no match / no ledger / error, 2 usage, 3 nothing to change."""
+    if "--resolve" in args and "--unresolve" in args:
+        print(USAGE)
+        return 2
+    undo = "--unresolve" in args
+    _, key = flag_value(args, "--unresolve" if undo else "--resolve")
+    has_sid, sid = flag_value(args, "--session")
+    if key is None or (has_sid and sid is None):
+        print(USAGE)
+        return 2
+    if has_sid:  # the guide band names the session whose ledger row it settles
+        f = ledger_path(sid)
+        sid = f.stem
+        if not f.exists():
+            print(f"abofles: no ledger for session {sid}")
+            return 1
+    else:
+        files = ledger_files(False)
+        if not files:
+            print("abofles: no ledger yet — nothing to " + ("reopen." if undo else "resolve."))
+            return 1
+        f = files[-1]  # this project's session
+        sid = f.stem
+    with state_lock(sid):  # the hook appends and rewrites this file under the same lock
+        try:
+            lines = f.read_text().splitlines()
+        except Exception as e:
+            print(f"abofles: cannot read {f.name}: {e}")
+            return 1
+        parsed = []  # (raw line, row or None): a half-written line is kept verbatim, never matched
+        for l in lines:
+            try:
+                r = json.loads(l)
+            except Exception:
+                r = None
+            parsed.append((l, r if isinstance(r, dict) else None))
+        hit = [r for _, r in parsed if r is not None and (r.get("agent_id") or "").startswith(key)]
+        if not hit:
+            print(f"abofles: no follow-up with agent id starting '{key}' in {f.name}")
+            return 1
+        if undo:
+            hit = [r for r in hit if r.get("resolved")]
+            if not hit:
+                print(f"abofles: not resolved ({key}…)")
+                return 3
+            for r in hit:
+                r.pop("resolved", None)
+        else:
+            if all(r.get("resolved") for r in hit):
+                print(f"abofles: already resolved ({key}…)")
+                return 3
+            for r in hit:
+                r["resolved"] = True
+        changed = {id(r) for r in hit}
+        out = "".join((json.dumps(r, ensure_ascii=False) if r is not None and id(r) in changed else l) + "\n" for l, r in parsed)
+        tmp = f.with_name(f"{f.name}.{os.getpid()}.tmp")
+        try:
+            tmp.write_text(out)
+            os.replace(tmp, f)
+        except Exception as e:
+            print(f"abofles: cannot write {f.name}: {e}")
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+            return 1
+    print(f"abofles: {'reopened' if undo else 'resolved'} {len(hit)} entr{'y' if len(hit) == 1 else 'ies'} ({key}…)")
+    if "--trace" in args and memo_trace:
+        i = args.index("--trace") + 1
+        ev = args[i] if i < len(args) and not args[i].startswith("--") else ""
+        r0 = hit[0]
+        kind = "open FAIL" if r0.get("verdict") == "FAIL" else "ATTENTION" if r0.get("attention") else "escalate"
+        what = f"{kind} · {r0.get('topic') or r0.get('side') or '?'}"
+        root = os.getcwd()  # the band runs with cwd = the guide root; the session's own root wins when known
+        try:
+            root = json.loads(state_path(sid).read_text()).get("root") or root
+        except Exception:
+            pass
+        if root:  # memo_trace creates the memo when this is the project's first journal line
+            memo_trace(root, sid, f"{'reopened' if undo else 'resolved'} by hand: {what}" + (f" · {ev}" if ev and ev not in what else ""))
+    return 0
+
+
 def main():
     args = sys.argv[1:]
     all_sessions = "--all" in args
@@ -100,32 +207,12 @@ def main():
     if not be or "--assumed-effort" in args:
         be = newest_state().get("effort") or be
     baseline = label(bm, be or "high")
+    if "--resolve" in args or "--unresolve" in args:
+        sys.exit(settle(args))
+
     files = ledger_files(all_sessions)
     if not files:
         print("abofles: no spawns logged yet.")
-        return
-
-    if "--resolve" in args:
-        key = args[args.index("--resolve") + 1]
-        if "--session" in args:  # the guide band names the session whose ledger row it settles
-            f = LEDGER_DIR / f"{args[args.index('--session') + 1]}.jsonl"
-            if not f.exists():
-                print(f"abofles: no ledger for session {f.stem}")
-                sys.exit(1)
-        else:
-            f = ledger_files(False)[-1]  # this project's session
-        rows = [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
-        hit = [r for r in rows if (r.get("agent_id") or "").startswith(key)]
-        if not hit:
-            print(f"abofles: no follow-up with agent id starting '{key}' in {f.name}")
-            sys.exit(1)
-        if all(r.get("resolved") for r in hit):
-            print(f"abofles: already resolved ({key}…)")
-            return
-        for r in hit:
-            r["resolved"] = True
-        f.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-        print(f"abofles: resolved {len(hit)} entr{'y' if len(hit) == 1 else 'ies'} ({key}…)")
         return
 
     rows = [r for _, rs in load(files) for r in rs]

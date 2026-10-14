@@ -32,7 +32,7 @@ You know your model. Your effort comes from the hook line `abofles: session effo
 
 | Main model | Mode | What it means |
 |---|---|---|
-| opus, fable | **Orchestrator** | Routes, spawns, reads replies, decides. Does **not** read code, grep, write code or run tests itself — every side goes through the matrix. A `Stop` hook refuses to end a turn that spawned agents without the receipt. |
+| opus, fable | **Orchestrator** | Routes, spawns, reads replies, decides. Does **not** read code, grep, write code or run tests itself — every side goes through the matrix. A `Stop` hook refuses to end a turn that spawned agents without the receipt. A guard warns on direct-read streaks in any mode. |
 | haiku, sonnet | **Worker** | Fine for T1–T2 or pure coordination. For T3+ the gate offers `Switch main to Opus 5.5 and orchestrate`. |
 
 **Agent gate — once per session, before the first spawn.** The hook denies the first Agent call until you ask (unless `Agents = auto | N | off`). Size the task, then ask **one** `AskUserQuestion` whose text contains `Abo Fles agent gate`, options in this order, labels starting exactly:
@@ -93,8 +93,8 @@ Never cut a finding to fit — rank, keep the top ones in full, end with `+N mor
 Escalate on `STATUS: partial|blocked`, `CONFIDENCE: low`, or verifier `VERDICT: FAIL` (fix with a Work agent, re-verify). Not escalation: a `partial` whose OPEN/LEFT is an owner decision (put it under `open`, ask the user); verifier `NOTE: ATTENTION:` (show it). One step at a time, re-running the same subtask:
 
 1. +1 effort on the same model (up to `xhigh`).
-2. Next model at `medium`: haiku → sonnet → opus → fable (fable only Analyse/Plan; Work/Verify stop at `opus·xhigh`).
-3. `max` only for T4 after `opus·xhigh` (or `fable·high` on Analyse/Plan) failed.
+2. Next model at `medium`: haiku → sonnet → opus → fable (fable only Analyse/Plan; Work/Verify/Read stop at `opus·xhigh`).
+3. `max` only for T4 after `opus·xhigh` (or `fable·xhigh` on Analyse/Plan) failed — opus·max for T4 Work/Verify. No step left: stop and report (the 🟡 guide item says so).
 
 Stop after 2 escalations per subtask; report what failed. Never re-run at the same setting.
 

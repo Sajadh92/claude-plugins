@@ -29,6 +29,8 @@ import fcntl
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -178,11 +180,31 @@ def units(model, effort):
 USER_CLAUDE_MD = Path(os.environ.get("ABOFLES_USER_CLAUDE_MD", Path.home() / ".claude" / "CLAUDE.md"))
 
 
+def override_block(txt):
+    """The lines under every `#+ abofles overrides` heading (any level, any case), up to the next heading of the same or a higher level.
+    A `#` line inside a code fence is not a heading."""
+    out, level, fence = [], 0, False
+    for line in (txt or "").splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+        h = None if fence else re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
+        if h:
+            if level and len(h.group(1)) <= level:
+                level = 0
+            if not level and h.group(2).strip().lower() == "abofles overrides":
+                level = len(h.group(1))
+                continue
+        if level:
+            out.append(line)
+    return "\n".join(out)
+
+
 def override_value(cwd, key):
-    """`- <key> = <value>` in the project's CLAUDE.md, else in the user's ~/.claude/CLAUDE.md, or None."""
+    """`- <key> = <value>` inside the `## abofles overrides` block of the project's CLAUDE.md, else of the user's ~/.claude/CLAUDE.md, or None.
+    A `- Key = value` line elsewhere in the file is prose, not an override."""
     for path in (Path(cwd) / "CLAUDE.md", Path(cwd) / ".claude" / "CLAUDE.md", USER_CLAUDE_MD):
         try:
-            txt = path.read_text()
+            txt = override_block(path.read_text())
         except Exception:
             continue
         m = re.search(r"^\s*-\s*" + re.escape(key) + r"\s*=\s*(.+?)\s*$", txt, re.M | re.I)
@@ -309,6 +331,8 @@ def reset_task(st):
     st["inflight"] = 0
     st["inflight_bg"] = 0
     st["judge_ok"] = 0  # an unlock not used by a question does not carry into the next task
+    st.pop("budget_ask_ts", None)
+    explain_clear(st)
     if st.get("gate") == "task":  # a per-task answer expires with the task; auto/off stay for the session
         st["gate"], st["task_budget"], st["task_parallel"] = None, None, None
 
@@ -332,15 +356,20 @@ def guide_on(cwd):
     return (override_value(cwd, "Guide") or "on").strip().lower() not in ("off", "0", "none")
 
 
-def next_setting(model, effort, side):
-    """Step 4, one step: +1 effort on the same model up to xhigh, then the next model at medium (fable only for Analyse/Plan)."""
+def next_setting(model, effort, side, tier=None):
+    """Step 4, one step: +1 effort on the same model up to xhigh, then the next model at medium (fable only for Analyse/Plan).
+    The top is opus·xhigh for Work/Verify/Read (opus·max only on T4) and fable·xhigh for Analyse/Plan (max only on T4);
+    (None, None) = no further step: stop and report."""
     m, e = (model or "opus"), (effort or "medium")
+    deep = side in ("Analyse", "Plan")
     if e in EFFORT_ORDER[:3]:
         return m, EFFORT_ORDER[EFFORT_ORDER.index(e) + 1]
     i = MODEL_ORDER.index(m) if m in MODEL_ORDER else 2
-    if i < 3 and not (i == 2 and side not in ("Analyse", "Plan")):
+    if i < 3 and not (i == 2 and not deep):
         return MODEL_ORDER[i + 1], "medium"
-    return m, "xhigh" if e != "xhigh" else "max"
+    if tier == 4 and e == "xhigh" and m == ("fable" if deep else "opus"):
+        return m, "max"
+    return None, None
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
@@ -350,9 +379,12 @@ def script_cmd(script, *args):
     return [sys.executable or "python3", str(SCRIPTS_DIR / script), *[str(a) for a in args]]
 
 
-def guide_item(p, text, fill, resolve=None):
-    """One row of the guide: priority emoji, the text, the prompt the band's Use button fills, and the argv that settles it (or None)."""
-    return {"p": p, "text": text, "fill": fill, "resolve": resolve}
+def guide_item(p, text, fill, resolve=None, recheck=None, unresolve=None, id=""):
+    """One row of the guide: priority emoji, the text, the prompt the band's Use button fills, the argv that settles it (or None),
+    the prompt that re-checks it first when a blind resolve is not allowed (or None), the argv that reopens it (or None), and a
+    stable `id` (`fail:<agent>`, `esc:<agent>`, `dec:<n>`, `ask`, `bg:<agent|count>`, `ctx:<mark>`, `memo-age`, `budget`, `next`)
+    the band keys its buttons and dismissals on."""
+    return {"id": id, "p": p, "text": text, "fill": fill, "resolve": resolve, "recheck": recheck, "unresolve": unresolve}
 
 
 def guide_items(root, st, sid):
@@ -369,9 +401,10 @@ def context_state(root, st):
     return tk, next((m for m in context_marks(root) if m * 1000 > tk), None)
 
 
-def guide_entries(root, st, sid):
+def guide_entries(root, st, sid, ctx_state=None):
     """The ladder, first match highest: open FAIL/ATTENTION → unasked judged question → owner decisions → unescalated
-    partial/low → background running → context/memo hygiene → budget → the memo's Next. Returns guide_item dicts."""
+    partial/low → background running → context/memo hygiene → budget → the memo's Next. Returns guide_item dicts.
+    `ctx_state` = a context_state() result the caller already has (one transcript tail read per refresh)."""
     items = []
     try:
         rows = [json.loads(l) for l in ledger_path(sid).read_text().splitlines() if l.strip()]
@@ -385,19 +418,24 @@ def guide_entries(root, st, sid):
             continue
         later_pass = any(x.get("verdict") == "PASS" and x.get("topic") == r.get("topic") for x in rows[i + 1:])
         topic, aid = r.get("topic") or r.get("side"), r.get("agent_id")
-        resolve = script_cmd("status.py", "--resolve", aid, "--session", sid) if aid else None
+        def recheck(what, task="run only the failed criterion's check"):  # no blind resolve for a FAIL/ATTENTION: re-check first, resolve with the evidence as the trace
+            if not aid:
+                return None
+            cmd = " ".join(shlex.quote(x) for x in script_cmd("status.py", "--resolve", aid, "--session", sid))
+            return (f"abofles: re-check the {what} on {topic} (agent {aid}): {task} (main session when ≤ 3 calls, else a Verify agent at −1 effort). "
+                    f"If it passes, resolve it: `{cmd} --trace \"re-checked: <evidence>\"`; if it fails, fix it first.")
         if r.get("verdict") == "FAIL" and not later_pass:
             items.append(guide_item("🔴", f"open FAIL · {topic}: fix it (main session when ≤ 3 calls), re-verify only the failed criterion",
                                     f"abofles: open FAIL on {topic} (agent {aid or '?'}) — fix it in the main session when ≤ 3 calls, then re-verify only the failed criterion. "
-                                    "If it is already fixed, say so and resolve it.", resolve))
+                                    "If it is already fixed, say so and resolve it.", None, recheck("open FAIL"), id=f"fail:{aid or topic}"))
         elif r.get("attention") and not later_pass:
             items.append(guide_item("🔴", f"ATTENTION · {topic}: show it to the user before closing the task",
                                     f"abofles: open ATTENTION on {topic} (agent {aid or '?'}) — show it to the user before closing the task and say how it is handled. "
-                                    "If it is already handled, say so and resolve it.", resolve))
+                                    "If it is already handled, say so and resolve it.", None, recheck("ATTENTION", "confirm it is handled"), id=f"fail:{aid or topic}"))
     # 2. a judged question nobody asked
     if st.get("judge_ok", 0) > 0 and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT:
         items.append(guide_item("🟠", "a judged question is unasked — AskUserQuestion now (QUESTION + WHY in the box, options as cards)",
-                                "abofles: the judged question is still unasked — ask it now with AskUserQuestion."))
+                                "abofles: the judged question is still unasked — ask it now with AskUserQuestion.", id="ask"))
     # 3. owner decisions open in the memo
     try:
         need = [l for l in memo_read(root)["Needs you"].splitlines() if "[ ]" in l]
@@ -410,7 +448,8 @@ def guide_entries(root, st, sid):
         body = re.sub(r"\s*\(s:[0-9a-f]{4,8}\)\s*$", "", re.sub(r"^\d+\. \[ \] \S+ \S+ · ", "", need[0].strip()))
         items.append(guide_item("🟠", f"{len(need)} owner decision{'s' if len(need) > 1 else ''} open — ask (judge first): {clip(first, 90)}",
                                 f"abofles: owner decision {num} is open: {clip(body, 140).rstrip('.!?')}. Judge it first, then ask me with AskUserQuestion.",
-                                script_cmd("memo.py", "resolve", num, "settled from the guide band") if num else None))
+                                script_cmd("memo.py", "resolve", num, "settled from the guide band", "--trace", "--session", sid) if num else None,
+                                None, script_cmd("memo.py", "reopen", num, "--trace", "--session", sid) if num else None, id=f"dec:{num or '?'}"))
     # 4. a reply of this task that needs Step 4 and got nothing
     for r in rows:
         if r.get("ts", 0) <= started or r.get("resolved") or side_of(r.get("agent") or "")[0] in ("judge", "explainer"):
@@ -418,39 +457,48 @@ def guide_entries(root, st, sid):
         if r.get("owner_input") or r.get("status") == "pending":
             continue
         if r.get("status") in ("partial", "blocked") or r.get("confidence") == "low":
-            nm, ne = next_setting(r.get("model"), r.get("effort"), r.get("side"))
-            items.append(guide_item("🟡", f"escalate · {r.get('side')} {label(r.get('model'), r.get('effort'))} came back {r.get('status')}/{r.get('confidence')} — re-run that subtask at {label(nm, ne)} (Step 4), or say why not",
+            nm, ne = next_setting(r.get("model"), r.get("effort"), r.get("side"), r.get("tier") or st.get("task_tier_max") or None)
+            who = (r.get("agent_id") or "")[:8] or r.get("topic") or "?"  # two same-side/model/status agents must read differently
+            cur = f"{r.get('side')} {label(r.get('model'), r.get('effort'))} came back {r.get('status')}/{r.get('confidence')}"
+            step = f"re-run that subtask at {label(nm, ne)} (Step 4), or say why not" if nm else \
+                "no higher setting for this tier — stop and report what is still missing to the user, do not re-run"
+            note = clip(cur, 120)
+            items.append(guide_item("🟡", f"escalate · {cur} — {step} · agent {who}",
                                     f"abofles: the {r.get('side')} agent on {r.get('topic') or '?'} (agent {r.get('agent_id') or '?'}) came back {r.get('status')}/{r.get('confidence')} — "
-                                    f"re-run that subtask at {label(nm, ne)} (Step 4), or say why not; if its reply is sound, say so and resolve it.",
-                                    script_cmd("status.py", "--resolve", r["agent_id"], "--session", sid) if r.get("agent_id") else None))
+                                    f"{step}; if its reply is sound, say so and resolve it.",
+                                    script_cmd("status.py", "--resolve", r["agent_id"], "--session", sid, "--trace", note) if r.get("agent_id") else None,
+                                    None, script_cmd("status.py", "--unresolve", r["agent_id"], "--session", sid, "--trace", note) if r.get("agent_id") else None,
+                                    id=f"esc:{r.get('agent_id') or who}"))
             break
     # 5. background agents still running
-    running = sum(1 for r in rows if r.get("status") == "pending")
+    pend = [r for r in rows if r.get("status") == "pending"]
+    running = len(pend)
     if running:
         items.append(guide_item("⏳", f"{running} background agent{'s' if running > 1 else ''} running — collect them (and their receipt) before the next ticket",
-                                "abofles: collect the background agents and print their receipt."))
+                                "abofles: collect the background agents and print their receipt.",
+                                id=f"bg:{pend[0].get('agent_id') or running}" if running == 1 else f"bg:{running}"))
     # 6. context and memo hygiene
-    tk, nxt = context_state(root, st)
+    tk, nxt = ctx_state if ctx_state is not None else context_state(root, st)
     if tk is not None:
         if nxt is None:
-            items.append(guide_item("🧠", f"context {tk // 1000}K is past the last mark — /abofles:memo, then /compact at the next task boundary", "/abofles:memo"))
+            items.append(guide_item("🧠", f"context {tk // 1000}K is past the last mark — /abofles:memo, then /compact at the next task boundary", "/abofles:memo", id="ctx:past"))
         elif nxt * 1000 - tk <= 50_000:
-            items.append(guide_item("🧠", f"context {tk // 1000}K, mark {nxt}K is {(nxt * 1000 - tk) // 1000}K away — plan /abofles:memo + /compact at the next task boundary", "/abofles:memo"))
+            items.append(guide_item("🧠", f"context {tk // 1000}K, mark {nxt}K is {(nxt * 1000 - tk) // 1000}K away — plan /abofles:memo + /compact at the next task boundary", "/abofles:memo", id=f"ctx:{nxt}"))
     try:
         mine = next((b for k, b in now_blocks(memo_read(root)["Now"]) if k == sid8(sid)), None)
         wm = re.search(r"^Written\s+(\S+ \S+)", mine or "", re.M)
         if wm:
             age_min = int((time.time() - time.mktime(time.strptime(wm.group(1), "%Y-%m-%d %H:%M"))) // 60)
-            since = sum(1 for l in memo_read(root)["Journal"].splitlines() if f"s:{sid8(sid)}" in l and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > wm.group(1)[5:])
+            since = sum(1 for l in memo_read(root)["Journal"].splitlines() if f"s:{sid8(sid)}" in l and not TRACE_RE.search(l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > wm.group(1)[5:])
             if age_min >= 120 and since:
-                items.append(guide_item("🧠", f"memo Now is {span(age_min)} old with {since} receipt{'s' if since > 1 else ''} since — run /abofles:memo before the next break", "/abofles:memo"))
+                items.append(guide_item("🧠", f"memo Now is {span(age_min)} old with {since} receipt{'s' if since > 1 else ''} since — run /abofles:memo before the next break", "/abofles:memo", id="memo-age"))
     except Exception:
         pass
     # 7. budget nearly out on an open chain
     budget, src = task_budget(root, st, st.get("task_tier_max") or None)
     if budget is not None and work_spawns(st) and budget - budget_used(st) <= 1:
         left = max(0, budget - budget_used(st))
-        items.append(guide_item("💰", f"agent budget: {left} of {budget} left ({src}) — finish in the main session, or `/abofles:agents N`", "/abofles:agents"))
+        items.append(guide_item("💰", f"agent budget: {left} of {budget} left ({src}) — finish in the main session, or `/abofles:agents N`", "/abofles:agents", id="budget"))
     # 8. nothing open: the memo's Next
     if not items:
         nxt_line = ""
@@ -460,8 +508,10 @@ def guide_entries(root, st, sid):
             nxt_line = nm.group(1).strip() if nm else ""
         except Exception:
             pass
+        if re.match(r"none\b", nxt_line, re.I):
+            nxt_line = ""  # `none — ready for the next task`: nothing to carry over
         items.append(guide_item("✅", f"nothing open — next from the memo: {clip(nxt_line, 110)}" if nxt_line else "nothing open — pick the next ticket and route it with abofles first",
-                                nxt_line or "Pick the next ticket and route it with abofles first."))
+                                nxt_line or "Pick the next ticket and route it with abofles first.", id="next"))
     return items
 
 
@@ -481,9 +531,10 @@ def refresh_guide(root, st, sid):
     if not guide_on(root):
         st["guide"] = None
         return None
-    items = guide_entries(root, st, sid)
+    cs = context_state(root, st)  # one transcript tail read for both the ladder and the band's meter
+    items = guide_entries(root, st, sid, cs)
     line = "🧭 " + " · ".join(f"{i['p']} {i['text']}" for i in items[:3]) + (f" · +{len(items) - 3} more" if len(items) > 3 else "")
-    tk, nxt = context_state(root, st)
+    tk, nxt = cs
     task = None
     if work_spawns(st):
         budget, _ = task_budget(root, st, st.get("task_tier_max") or None)
@@ -652,6 +703,19 @@ def needs_items(open_line):
     return [clip(x) for x in re.split(r";\s*", open_line) if x.strip() and NEEDS_RE.search(x)]
 
 
+TRACE_RE = re.compile(r"· (resolved|reopened) by hand:")  # a hand-trace journal line is not a receipt: receipt counters skip it
+
+
+def memo_trace(cwd, session_id, text):
+    """One non-receipt line in the Journal: `- MM-DD HH:MM · s:<sid8> · resolved by hand: …`."""
+    with memo_lock(cwd):
+        sec = memo_read(cwd)
+        entry = f"- {time.strftime('%m-%d %H:%M')} · " + (f"s:{sid8(session_id)} · " if session_id else "") + clip(text, 200)
+        lines = [l for l in sec["Journal"].splitlines() if l.strip()]
+        sec["Journal"] = "\n".join(([entry] + lines)[:JOURNAL_KEEP])
+        memo_write(cwd, sec, session_id)
+
+
 def memo_journal(cwd, session_id, rc):
     with memo_lock(cwd):
         _memo_journal(cwd, session_id, rc)
@@ -677,6 +741,8 @@ def _memo_journal(cwd, session_id, rc):
             need.append(f"{len(need) + 1}. [ ] {stamp} · {item}" + (f" (s:{sid8(session_id)})" if session_id else ""))
             have.append(key)
     sec["Needs you"] = "\n".join(need)
+    mine = next((b for k, b in now_blocks(sec["Now"]) if k == sid8(session_id)), "")
+    now_set(sec, session_id, receipt_now(cwd, mine, rc), " · from receipt")  # the band's "next from the memo" must follow the receipt, not the last /abofles:memo
     memo_write(cwd, sec, session_id)
 
 
@@ -736,21 +802,35 @@ def _memo_decision(cwd, session_id, question, answer):
     memo_write(cwd, sec, session_id)
 
 
-def memo_resolve(cwd, n, note=""):
+def memo_resolve(cwd, n, note="", session_id=""):
     """Tick item n of Needs you. Returns the item text or None."""
     with memo_lock(cwd):
-        return _memo_resolve(cwd, n, note)
+        return _memo_resolve(cwd, n, note, session_id)
 
 
-def _memo_resolve(cwd, n, note=""):
+def _memo_resolve(cwd, n, note="", session_id=""):
     sec = memo_read(cwd)
     lines = sec["Needs you"].splitlines()
     for i, l in enumerate(lines):
         if l.startswith(f"{n}. [ ] "):
             lines[i] = l.replace("[ ]", "[x]", 1) + f" → resolved {time.strftime('%m-%d %H:%M')}" + (f": {clip(note, 120)}" if note else "")
             sec["Needs you"] = "\n".join(lines)
-            memo_write(cwd, sec)
+            memo_write(cwd, sec, session_id)
             return l
+    return None
+
+
+def memo_reopen(cwd, n, session_id=""):
+    """Turn a resolved item n of Needs you back to open, dropping the resolve note. Returns the item text or None."""
+    with memo_lock(cwd):
+        sec = memo_read(cwd)
+        lines = sec["Needs you"].splitlines()
+        for i, l in enumerate(lines):
+            if l.startswith(f"{n}. [x] "):
+                lines[i] = l.replace("[x]", "[ ]", 1).split(" → resolved")[0]
+                sec["Needs you"] = "\n".join(lines)
+                memo_write(cwd, sec, session_id)
+                return lines[i]
     return None
 
 
@@ -773,17 +853,69 @@ def now_blocks(now_text):
     return blocks
 
 
+def now_set(sec, session_id, text, mark=""):
+    """Put `text` (a Now body: Task/Done/Left/Decisions/Next/Verify/Tree lines) in this session's block of sec["Now"], stamped
+    `Written <date time>` plus `mark`; other sessions' blocks stay. The caller holds the memo lock and writes the file."""
+    me = sid8(session_id)
+    body = f"Written   {time.strftime('%Y-%m-%d %H:%M')}{mark}\n" + re.sub(r"^(Written|Session)\s+.*\n?", "", text.strip(), flags=re.M).strip()
+    others = [(k, b) for k, b in now_blocks(sec["Now"]) if k != me and k][:NOW_BLOCKS - 1]
+    mine = (f"Session   {me}\n" if me else "") + body
+    sec["Now"] = "\n\n".join([mine] + [f"Session   {k}\n{b}" for k, b in others])
+
+
 def memo_now(cwd, text, session_id=""):
     """Replace this session's block of the Now section (what /abofles:memo writes); other sessions' blocks and the hook
     sections stay. Several Claude sessions in one project root each keep their own Now."""
-    me = sid8(session_id)
-    body = f"Written   {time.strftime('%Y-%m-%d %H:%M')}\n" + re.sub(r"^(Written|Session)\s+.*\n?", "", text.strip(), flags=re.M).strip()
     with memo_lock(cwd):
         sec = memo_read(cwd)
-        others = [(k, b) for k, b in now_blocks(sec["Now"]) if k != me and k][:NOW_BLOCKS - 1]
-        mine = (f"Session   {me}\n" if me else "") + body
-        sec["Now"] = "\n\n".join([mine] + [f"Session   {k}\n{b}" for k, b in others])
+        now_set(sec, session_id, text)
         memo_write(cwd, sec, session_id)
+
+
+NOW_LABEL_RE = re.compile(r"^(Written|Task|Done|Left|Decisions|Next|Verify|Tree)(\s|$)")
+
+
+def now_raw(block):
+    """A Now block as {label: its lines verbatim, continuation lines included}."""
+    out, key = {}, None
+    for line in (block or "").splitlines():
+        m = NOW_LABEL_RE.match(line)
+        if m:
+            key = m.group(1)
+        if key and line.strip():
+            out.setdefault(key, []).append(line.rstrip())
+    return out
+
+
+def git_tree(cwd):
+    """`Tree` lines of a Now block from `git status --short` (first 20, `clean` when empty); [] on any error or outside a git repo."""
+    try:
+        r = subprocess.run(["git", "status", "--short"], cwd=cwd, capture_output=True, text=True, timeout=3)
+    except Exception:
+        return []
+    if r.returncode != 0:
+        return []
+    rows = [l.rstrip() for l in r.stdout.splitlines() if l.strip()][:20]
+    return ["Tree      " + rows[0]] + ["          " + l for l in rows[1:]] if rows else ["Tree      clean"]
+
+
+def receipt_now(cwd, old_block, rc):
+    """The Now body a receipt implies: between tasks, what the receipt did and left, Next = its first open item. Decisions
+    are kept from the old block; Done/Verify/Tree too when the receipt (or git) gives nothing new."""
+    old = now_raw(old_block)
+    lab = lambda k, v: f"{k:<10}{v}"
+    done = [clip(x, 240) for x in split_items(rc.get("done") or "")]
+    op = (rc.get("open") or "").strip()
+    left = [] if not op or re.match(r"none\b", op, re.I) else [clip(x, 240) for x in split_items(op)]
+    chk = clip(rc.get("check") or "", 240)
+    lines = [lab("Task", "none — between tasks")]
+    lines += [lab("Done", x) for x in done] if done else old.get("Done", [])
+    lines += [lab("Left", x) for x in left]
+    lines += old.get("Decisions", [])
+    lines.append(lab("Next", left[0] if left else "none — ready for the next task"))
+    lines += [lab("Verify", chk)] if chk else old.get("Verify", [])
+    lines += git_tree(cwd) or old.get("Tree", [])
+    return "\n".join(lines)
 
 
 def span(minutes):
@@ -859,22 +991,27 @@ def resume_block(cwd, away_min=None, session_id="", guide=None):
         elif key and line.strip() and key not in ("Tree",):
             now[key].append(line.strip())  # a continuation line, or a second `Left` item written without its label
     written = (now.get("Written") or [None])[0]
+    from_receipt = "from receipt" in (written or "")
+    wm0 = re.match(r"\d{4}-\d\d-\d\d \d\d:\d\d", written or "")
+    written = wm0.group(0) if wm0 else written
     age = ""
     newer = 0
     if written:
         try:
             age_min = int((time.time() - time.mktime(time.strptime(written, "%Y-%m-%d %H:%M"))) // 60)
-            age = f" · now written {written} ({span(age_min)} ago)" if age_min >= 60 else f" · now written {written}"
+            age = f" · now written {written}" + (" from receipt" if from_receipt else "") + (f" ({span(age_min)} ago)" if age_min >= 60 else "")
             wm = written[5:]
             if written[:4] == time.strftime("%Y"):  # journal stamps carry no year: compare only within the year the memo was written
                 newer = sum(1 for l in sec["Journal"].splitlines() if re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > wm
-                            and (not me or f"s:{me}" in l))
+                            and not TRACE_RE.search(l) and (not me or f"s:{me}" in l))
         except Exception:
             pass
     open_items = [l for l in sec["Needs you"].splitlines() if "[ ]" in l]
     jall = [l for l in sec["Journal"].splitlines() if l.strip()]
     jmine = [l for l in jall if f"s:{me}" in l] if me else jall
     jother = [l for l in jall if l not in jmine]
+    jmine = [l for l in jmine if not TRACE_RE.search(l)]  # `last` = receipts; a hand-trace line is not one
+    jother = [l for l in jother if not TRACE_RE.search(l)]
     journal = jmine[:3] or [re.sub(r"· s:([0-9a-f]+) ·", r"· (session \1, not this one) ·", l) for l in jother[:2]]
     head = f"📍 **Resume** · memo {memo_updated(cwd) or '?'}" + (f" · away {span(away_min)}" if away_min else "") + (f" · session {me}" if me else "") + age
     lines = [head]
@@ -1097,7 +1234,7 @@ def question_gate_text(st, lang=None):
             "ASK → AskUserQuestion: question text = QUESTION, a blank line, WHY (EXPLAIN only if it adds a fact the options lack); "
             "options = OPTIONS (label + `then:` as description), RECOMMEND first with `(Recommended)`, not restated in the text. "
             "The box is PLAIN TEXT: no table, `|`, `**`, code fence. If EXPLAIN needs markdown (table, diagram, example), print it first in your reply under "
-            f"`{EXPLAIN_MARK} **Explanation for the question below**`, then ask with a plain summary ending in `{EXPLAIN_MARK} the full table/diagram is printed above this question` "
+            f"`{EXPLAIN_MARK} **Explanation for the question below**`, then ask: question text = QUESTION, a blank line, WHY (no option summary), ending with `{EXPLAIN_MARK} the full table/diagram is printed above this question`. "
             "HANDOFF (T3–T4) → spawn `abofles:abofles-explainer` (`abofles: <Topic> / Explain · T<tier>`, same Language) with the Judge's QUESTION, EVIDENCE, WHY; ask from its reply. "
             "A reworded re-ask needs no second judge; the agent gate question is exempt.")
 
@@ -1110,8 +1247,66 @@ ASK_MD = (f"question judged — its EXPLAIN needs markdown (table / diagram / ex
           "No tool call between the text and the question; never \"reply in chat\" instead of the box.")
 
 
+EXPLAIN_KEYS = ("explain_md", "explain_text", "explain_offset", "explain_denies", "explain_prev")
+
+
+def explain_cut(ex, limit=6000):
+    """EXPLAIN text cut at the last blank line before `limit` chars (never mid-table); an open ``` fence the cut leaves is closed."""
+    if len(ex) <= limit:
+        return ex
+    cut = ex[:limit]
+    blanks = list(re.finditer(r"\n[ \t]*\n", cut))
+    if blanks:
+        cut = cut[: blanks[-1].start()]
+    cut = cut.rstrip()
+    if len(re.findall(r"^\s*```", cut, re.M)) % 2:
+        cut += "\n```"
+    return cut
+
+
+def explain_arm(st, md, text="", offset=None):
+    """The one place the explanation gate is armed (md: the question's EXPLAIN must be printed as markdown first, `text` is the
+    block to hand back, `offset` the transcript size after which a print counts) or disarmed (md False). `explain_prev` stays."""
+    st["explain_md"], st["explain_denies"] = bool(md), 0
+    st["explain_text"] = explain_cut(text) if md else ""
+    st["explain_offset"] = offset if md or offset is not None else None
+
+
+def explain_clear(st):
+    """Forget the whole explanation state, the previous round's copy included (a task ends, a session starts)."""
+    for k in EXPLAIN_KEYS:
+        st.pop(k, None)
+
+
+def explain_print_block(ex):
+    return f"{EXPLAIN_MARK} **Explanation for the question below**\n\n{ex}"
+
+
+def ask_md_text(ex):
+    """ASK_MD with the Explainer's own block handed over to print word for word: a model told to "print the EXPLAIN"
+    has announced the table in its thinking and then sent the question alone (DCMP, 2026-10-14)."""
+    if not ex:
+        return ASK_MD
+    return (ASK_MD + " Print this block **verbatim, as reply text** (not in your thinking), then the AskUserQuestion call — "
+            "the hook checks the transcript and refuses the question once if the block is missing:\n\n" + explain_print_block(ex))
+
+
+def explain_printed(transcript_path, offset):
+    """True when assistant text written after `offset` carries the explanation: the 📖 heading, a markdown table,
+    a code fence or a box diagram. The text of the message holding the question is written before its tool call."""
+    for t in assistant_texts_after(transcript_path, offset):
+        if EXPLAIN_MARK in t or re.search(r"^\s*\|.*\|\s*$", t, re.M) or "```" in t or re.search(r"[┌┐└┘│─├┤]", t):
+            return True
+    return False
+
+
+EXPLAIN_MISSING = ("abofles: the question's explanation is not printed — the user would see the question without the table it points to. "
+                   "Print this block verbatim now as reply text, then call AskUserQuestion again in the same message (same question, same options):\n\n")
+
+
 REASK_WINDOW = 900  # seconds after an allowed question in which the same round may be asked again (reworded, translated) with no judge
 GUIDE_WINDOW = 4 * 3600  # seconds back the guide looks for open FAIL/escalation rows when no task start is known
+BUDGET_ASK_WINDOW = 600  # seconds after an agent-budget deny in which one AskUserQuestion (raise the budget?) needs no Judge
 GATE_WAIT = 900  # seconds after a SendMessage to a gate agent during which the Stop hook does not demand the question (its reply is still coming)
 
 
@@ -1129,18 +1324,45 @@ def qgate(data):
             return
         asked = st.get("asked") or []
         root = project_root(data, st)
-        fast_minor = pace(root) == "fast" and (st.get("task_tier_max") or 0) <= 2  # Pace = fast: Minor/Normal questions go straight to the user
-        if GATE_MARK.lower() in qs.lower() or questions_setting(root) == "off" or fast_minor:
+        tier_now = max(st.get("task_tier_max") or 0, st.get("main_tier") or 0)  # before any spawn only the main-session tier is known; 0 = unknown -> judge
+        fast_minor = pace(root) == "fast" and 1 <= tier_now <= 2  # Pace = fast: Minor/Normal questions go straight to the user
+        budget_q = time.time() - st.get("budget_ask_ts", 0) < BUDGET_ASK_WINDOW  # right after a budget deny: "raise it?" is a plugin question, not a code decision
+        if GATE_MARK.lower() in qs.lower() or questions_setting(root) == "off" or fast_minor or budget_q:
+            st.pop("budget_ask_ts", None)  # one question per deny
             st["asked"] = (asked + [question_line(q) for q in qlist])[-12:]
             save_state(sid, st)
             return
         ok = st.get("judge_ok", 0)
         reask = bool(qlist) and all(any(similar(q, a) for a in asked) for q in qlist)  # the same round again, reworded: already judged
         reask = reask or (time.time() - st.get("last_ask_ts", 0)) < REASK_WINDOW  # or asked again right after (a translation shares no words)
+        tp = data.get("transcript_path") or st.get("transcript_path") or ""
+        if (ok > 0 or reask) and st.get("explain_md") and st.get("explain_text") and st.get("explain_denies", 0) < 1 \
+                and not explain_printed(tp, st.get("explain_offset", 0)):
+            st["explain_denies"] = st.get("explain_denies", 0) + 1  # once: a second miss goes through rather than loop
+            save_state(sid, st)
+            deny(EXPLAIN_MISSING + explain_print_block(st["explain_text"]))
+            return
+        # a re-ask of a question whose explanation needed markdown (the user said "no table here, print it, then ask"):
+        # it must carry the explanation again, printed after the previous ask (DCMP 2026-10-14, twice in a row)
+        if ok > 0 and not st.get("explain_md") and st.get("explain_offset") is not None:
+            st.pop("explain_prev", None)  # a new judged question with a plain EXPLAIN: the previous round's table is not owed again
+        prev = st.get("explain_prev") or {}
+        if reask and not (st.get("explain_md") and st.get("explain_text")) and prev.get("text") and (time.time() - prev.get("ts", 0)) < REASK_WINDOW and prev.get("denies", 0) < 1 \
+                and not explain_printed(tp, prev.get("offset", 0)):
+            prev["denies"] = prev.get("denies", 0) + 1
+            st["explain_prev"] = prev
+            save_state(sid, st)
+            deny(EXPLAIN_MISSING + explain_print_block(prev["text"]))
+            return
         if ok > 0 or reask:
             if ok > 0:
                 st["judge_ok"] = ok - 1
-            st["explain_md"] = False
+            if st.get("explain_md") and st.get("explain_text"):  # kept for a re-ask of this round (see above)
+                st["explain_prev"] = {"text": st["explain_text"], "ts": int(time.time()), "offset": transcript_size(tp), "denies": 0}
+            elif st.get("explain_prev"):
+                st["explain_prev"]["offset"] = transcript_size(tp)  # each re-ask needs the explanation again after it
+                st["explain_prev"]["denies"] = 0
+            explain_arm(st, False)
             st["last_ask_ts"] = int(time.time())
             st["asked"] = (asked + [question_line(q) for q in qlist])[-12:]
             save_state(sid, st)
@@ -1175,14 +1397,24 @@ def sendmsg(data):
             return
         st["judge_ok"] = st.get("judge_ok", 0) + 1
         st["gate_wait_ts"] = int(time.time())
+        prev = st.get("explain_prev") or {}
+        if prev.get("text") and (time.time() - prev.get("ts", 0)) < REASK_WINDOW:  # the same round again: its table must be printed again, after this message
+            explain_arm(st, True, prev["text"], transcript_size(data.get("transcript_path") or st.get("transcript_path") or ""))
         save_state(sid, st)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": SENDMSG_TEXT}}))
 
 
 def explain_block(text):
-    """The EXPLAIN section of a judge/explainer reply (to its end)."""
+    """The EXPLAIN section of a judge/explainer reply: to the next `VERDICT:` line (a judge may answer several questions) or the end.
+    Only a single inline-code wrap of a one-line text is removed; a fenced block keeps its fence (it counts as markdown)."""
     m = re.search(r"^\s*EXPLAIN:\s*(.*)$", text, re.M | re.S)
-    return (m.group(1) if m else "").strip().strip("`").strip()
+    ex = m.group(1) if m else ""
+    v = re.search(r"^\s*VERDICT:", ex, re.M)
+    if v:
+        ex = ex[: v.start()]
+    ex = ex.strip()
+    w = re.fullmatch(r"`([^`\n]+)`", ex)
+    return w.group(1).strip() if w else ex
 
 
 def explain_needs_markdown(text):
@@ -1504,7 +1736,8 @@ def midturn_receipt(data, st):
 
 def budget_deny(budget, src, no_tier, used):
     return (f"Abo Fles (ابو فليس): this task's agent budget is {budget} ({src}{' — no `abofles: <Topic> / <Side> · T<n>` first line, sized Normal' if no_tier else ''}); {used} already ran or are running. "
-            f"Finish in the main session, or raise it: `/abofles:agents N` (chat `agents N` → `python3 \"{Path(__file__).resolve().parent.parent / 'scripts' / 'agents.py'}\" set N`).")
+            f"Finish in the main session, or raise it: `/abofles:agents N` (chat `agents N` → `python3 \"{Path(__file__).resolve().parent.parent / 'scripts' / 'agents.py'}\" set N`). "
+            "To ask the user which, one AskUserQuestion goes straight through (no Judge) within 10 min.")
 
 
 def cap_deny(cap):
@@ -1557,6 +1790,8 @@ def pre(data):
         cap = st.get("task_parallel") or parallel_cap(cwd)
         running = pending_count(sid) + st.get("inflight_bg", 0)
         over_budget = budget is not None and used >= budget and not is_q
+        if over_budget:
+            st["budget_ask_ts"] = int(time.time())  # the one question "raise the budget?" may go to the user with no Judge
         over_cap = bool(cap and ti.get("run_in_background") and running >= cap)
         ml = None
         if not over_budget and not over_cap and not is_q and work_spawns(st) == 0 and not st.get("inflight"):
@@ -1625,11 +1860,25 @@ def side_of(stype):
 
 def prompt_dirs(prompt):
     """Absolute folders the spawn prompt names (`Working tree: /…/worktree`): a reader working there cites paths
-    relative to them, not to the session's project root."""
+    relative to them, not to the session's project root. Found bare, in quotes or backticks, and across spaces
+    (`/…/my proj/wt`: an unquoted match grows one word at a time while the longer path is a folder)."""
+    text = prompt or ""
+    found = []  # (position, dir)
+    for m in re.finditer(r"""["'`](/[^"'`\n]+)["'`]""", text):
+        found.append((m.start(1), m.group(1).strip().rstrip("/.")))
+    for m in re.finditer(r"(?<![\w.])(/(?:[\w.\-]+/)*[\w.\-]+)", text):
+        cur, end, best = m.group(1), m.end(), m.group(1).rstrip(".")
+        for _ in range(6):
+            nxt = re.match(r" ([\w.\-]+(?:/[\w.\-]+)*)", text[end:])
+            if not nxt:
+                break
+            cur, end = cur + " " + nxt.group(1), end + nxt.end()
+            if os.path.isdir(cur.rstrip(".")):
+                best = cur.rstrip(".")
+        found.append((m.start(1), best))
     out = []
-    for m in re.finditer(r"(?<![\w.])(/(?:[\w.\-]+/)*[\w.\-]+)", prompt or ""):
-        d = m.group(1).rstrip(".")
-        if d not in out and os.path.isdir(d) and d.count("/") >= 3:
+    for _, d in sorted(found):
+        if d not in out and d.count("/") >= 3 and os.path.isdir(d):
             out.append(d)
         if len(out) >= 5:
             break
@@ -1894,10 +2143,11 @@ def post(data):
             else:
                 unlock = 1
                 md = explain_needs_markdown(text)
-                warnings.append(ASK_MD if md else ASK_PLAIN)
+                ex = explain_cut(explain_block(text)) if md else ""
+                warnings.append(ask_md_text(ex) if md else ASK_PLAIN)
                 with state_lock(data.get("session_id", "")):
                     stx = load_state(data.get("session_id", ""))
-                    stx["explain_md"], stx["explain_denies"] = bool(md), 0
+                    explain_arm(stx, md, ex, transcript_size(data.get("transcript_path") or ""))  # what the model prints after this point counts
                     save_state(data.get("session_id", ""), stx)
         entry["warnings"] = warnings or None
     # orchestrator guard: a spawn resets the direct-read streak; receipt check: one more spawn this turn
@@ -1967,6 +2217,21 @@ def post(data):
     emit("PostToolUse", warnings, rnote)
 
 
+def prune_locks(max_age=7 * 86400):
+    """Delete `*.lock` files in the state dir and its memo-locks dir not touched for 7 days (one is left behind per session and per project)."""
+    now = time.time()
+    for d in (STATE_DIR, STATE_DIR / "memo-locks"):
+        try:
+            for f in d.glob("*.lock"):
+                try:
+                    if now - f.stat().st_mtime > max_age:
+                        f.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
 def start(data):
     """SessionStart: the marker the guard gates on, so it works from the first turn (before any spawn)."""
     sid = data.get("session_id", "")
@@ -1984,6 +2249,7 @@ def start(data):
         root = project_root(data, st)
         g = refresh_guide(root, st, sid)
         save_state(sid, st)
+    prune_locks()
     if en:
         print(en)
     if memo_path(root).exists():
@@ -2107,6 +2373,8 @@ def prompt(data):
             block = resume_block(cwd, away, session_id=sid, guide=refresh_guide(cwd, st, sid))
             if block:
                 rn = resume_note(block, f"the user was away {span(away)}")
+        else:
+            refresh_guide(cwd, st, sid)  # a row resolved from the band since the last hook: the ladder drops it now
         save_state(sid, st)
     msg = "\n\n".join(m for m in (en, rn) if m)
     if msg:
@@ -2123,7 +2391,7 @@ def background_running(session_id):
 
 def unasked_text(md):
     return ("abofles: a judged question is still unasked. Ask it now with AskUserQuestion — "
-            + (f"markdown explanation first in your reply under `{EXPLAIN_MARK} **Explanation for the question below**`, then the question with a plain summary. " if md else "QUESTION, WHY and plain EXPLAIN inside the question text. ")
+            + (f"markdown explanation first in your reply under `{EXPLAIN_MARK} **Explanation for the question below**`, then the question: text = QUESTION, a blank line, WHY (no option summary). " if md else "QUESTION, WHY and plain EXPLAIN inside the question text. ")
             + "Never \"reply in chat\" instead of the box.")
 
 
@@ -2152,6 +2420,7 @@ def receipt(data):
         unasked = (st.get("judge_ok", 0) > 0 and not data.get("stop_hook_active") and not background_running(sid)
                    and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT)  # before reset_task clears the unlock; not while a gate agent is still replying
         unasked_md = bool(st.get("explain_md"))
+        ex_keep = {k: st[k] for k in EXPLAIN_KEYS if k in st}  # reset_task clears the explain state; an unlock that survives it keeps its own
         if pending and has_receipt(text):
             reset_task(st)  # the receipt closes the task — even while a background agent of it is still running
         elif pending and not background_running(sid):  # a chain still running: the receipt is due when it ends
@@ -2168,16 +2437,22 @@ def receipt(data):
             keep_unlock = 0
         if unasked:
             st["judge_ok"] = max(st.get("judge_ok", 0), 1)  # keep the unlock alive for the question that must follow
+            st.update(ex_keep)
             st["explain_md"] = unasked_md
             reasons.append(unasked_text(unasked_md))
         if keep_unlock:
             st["judge_ok"] = max(st.get("judge_ok", 0), keep_unlock)
+            st.update(ex_keep)
         cw = context_watch(data, st)
         if cw:
             reasons.append(cw)
         save_state(sid, st)
     if rc:
         memo_journal(root, sid, rc)
+        with state_lock(sid):  # the receipt's open items just reached Needs you: the guide (and the band) show them now
+            st = load_state(sid)
+            refresh_guide(root, st, sid)
+            save_state(sid, st)
     if reasons:
         if len(reasons) == 1 and not cw:
             reasons[0] += " Nothing after it."
@@ -2203,6 +2478,8 @@ def close_row(row, text, st, sid, cwd, how=""):
                 memo_needs(cwd, sid, f"judge decided ({tier_name(row.get('tier') or 3)}): {q} → {a} — check")
         elif not (kind == "judge" and verdict == "HANDOFF"):
             st["judge_ok"] = st.get("judge_ok", 0) + 1
+            md = explain_needs_markdown(text)  # as post() does for a sync reply: the Stop/qgate hooks then demand the printed explanation
+            explain_arm(st, md, explain_block(text) if md else "", transcript_size(st.get("transcript_path") or ""))
     row["completed_ts"] = int(time.time())
     if how:
         warnings = list(warnings) + [how]
