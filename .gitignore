@@ -1,3 +1,6 @@
 .DS_Store
 # working notes for the plugin session, not for GitHub
 docs/
+.claude/abofles-memo.*
+__pycache__/
+*.pyc

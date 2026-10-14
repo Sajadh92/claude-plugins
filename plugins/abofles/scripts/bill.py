@@ -19,9 +19,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 try:
-    from abofles_hook import newest_state
+    from abofles_hook import label, newest_state, newest_session_id, usd, fmt_tokens, fmt_usd, PRICE_USD
 except Exception:  # pragma: no cover
     newest_state = lambda: {}
+    newest_session_id = lambda: ""
+    label = lambda m, e=None: f"{m} · {e}" if e else m
+    usd = lambda m, u: 0.0
+    fmt_tokens = str
+    fmt_usd = lambda x: f"${x:.2f}"
+    PRICE_USD = {}
 
 LEDGER_DIR = Path(os.environ.get("ABOFLES_LEDGER_DIR", Path.home() / ".abofles" / "ledgers"))
 PRICE = {"haiku": 1, "sonnet": 20, "opus": 40, "fable": 100}
@@ -39,7 +45,8 @@ def load(all_sessions):
     if not files:
         return []
     if not all_sessions:
-        files = files[-1:]
+        mine = LEDGER_DIR / f"{newest_session_id()}.jsonl"  # this project's session, not whichever wrote last
+        files = [mine] if mine.exists() else files[-1:]
     rows = []
     for f in files:
         for line in f.read_text().splitlines():
@@ -63,7 +70,7 @@ def main():
         se = newest_state().get("effort")
         if se:
             be, assumed, from_session = se, False, True
-    baseline = f"{bm}·{be or 'high'}"
+    baseline = label(bm, be or "high")
     rows = load(all_sessions)
     if not rows:
         print("abofles: no spawns logged yet.")
@@ -78,7 +85,7 @@ def main():
     open_fail = {}
     total = 0.0
     for r in rows:
-        key = f"{r.get('model') or '?'}·{r.get('effort') or '?'}"
+        key = label(r.get("model") or "?", r.get("effort") or "?")
         by_model[key] += 1
         by_side[SIDE_FULL.get(r.get("side") or "?", r.get("side") or "?")] += 1
         by_topic[r.get("topic") or "(no header)"] += 1
@@ -102,7 +109,7 @@ def main():
     print("By model·effort:")
     mx = max(by_model.values()) if by_model else 1
     for k, n in by_model.most_common():
-        print(f"  {k:<16} {n:>3}  {'█' * max(1, round(20 * n / mx))}")
+        print(f"  {k:<20} {n:>3}  {'█' * max(1, round(20 * n / mx))}")
     print()
     print("By side: " + "  ".join(f"{s} {by_side[s]}" for s in SIDE_ORDER + sorted(k for k in by_side if k not in SIDE_ORDER) if s in by_side))
     print("Status: " + "  ".join(f"{c} {n}" for c, n in status.most_common()))
@@ -132,6 +139,21 @@ def main():
     else:
         note = " (every spawn ran on opus — the saving of abofles is in tier routing; no Read/T1–T2 spawn in this session)"
     print(f"Saved: {saved:.0f}%{note}")
+    print_real_spend(rows, bm)
+
+
+def print_real_spend(rows, base_model):
+    """Real tokens and dollars from the rows that carry them (subagent transcripts), priced at list prices."""
+    real = [r for r in rows if r.get("tokens")]
+    if not real:
+        return
+    tokens = sum(r["tokens"] for r in real)
+    cost = sum(r.get("usd") or 0 for r in real)
+    base = sum(r.get("base_usd") or 0 for r in real)
+    saved = base - cost
+    print()
+    print(f"Real spend ({len(real)} of {len(rows)} spawns had a transcript): {fmt_tokens(tokens)} tokens · {fmt_usd(cost)}")
+    print(f"Same tokens on {label(base_model)}: {fmt_usd(base)} · saved {fmt_usd(saved)} ({100 * saved / base:.0f}%)" if base else "")
 
 
 if __name__ == "__main__":

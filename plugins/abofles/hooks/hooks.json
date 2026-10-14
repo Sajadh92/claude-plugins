@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Abo Fles (ابو فليس) — plugin abofles — is active: in coding work, use the abofles skill at the start of each task and before spawning any subagent. Every Agent call must pass model and effort from the matrix; a hook blocks calls that do not. Commands: /abofles:route <task> (dry run), /abofles:bill (session cost), /abofles:status (follow-ups), /abofles:init (project overrides), /abofles:memo (hand-off memo before /compact). A context watch warns at 500K/600K/700K/750K/800K/850K/900K tokens.'"
+            "command": "echo 'Abo Fles (ابو فليس) — plugin abofles — is active: in coding work, use the abofles skill at the start of each task and before spawning any subagent. Every Agent call must pass model and effort from the matrix; a hook blocks calls that do not. Commands: /abofles:route <task> (dry run), /abofles:bill (session cost), /abofles:status (follow-ups), /abofles:init (project overrides), /abofles:memo (Now section of the work memo before /compact), /abofles:resume (where was I), /abofles:agents (agent budget), /abofles:guide (what to do next). A context watch warns at 500K/600K/700K/750K/800K/850K/900K tokens at the end of the turn.'"
           },
           {
             "type": "command",
@@ -16,11 +16,20 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|Bash",
+        "matcher": "Read|Grep|Glob|Bash|mcp__.*",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" guard"
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" qgate"
           }
         ]
       },
@@ -66,11 +75,29 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" decision"
+          }
+        ]
+      },
+      {
         "matcher": "Agent",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" post"
+          }
+        ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" sendmsg"
           }
         ]
       }

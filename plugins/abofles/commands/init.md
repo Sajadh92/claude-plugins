@@ -29,6 +29,17 @@ Set up Abo Fles for this project. Arguments: $ARGUMENTS
 - Main session = <model>·<effort>
 - Session cap = <N>
 - Context marks = <N>, <N>, …
+- Receipt = full | short | savings <N> | off
+- Break = <minutes> | off
+- Agents = ask | auto | <N> | off
+- Parallel = <M>
+- Agent budgets = <T1>, <T2>, <T3>, <T4>
+- Questions = judge | off
+- Pace = normal | fast
+- Language = <language of owner questions>
+- Guide = on | off
 ```
+
+Suggest only the lines the scan justifies; the last six are listed so the user knows they exist.
 
 Suggest `Context marks` only when the user said the project runs on a model with a small window (then `100, 150, 180`); never suggest `Session cap` unasked. Keep only the lines you suggested; an empty block with just the heading is valid and means "matrix as is". Tell the user the file path and that abofles reads this block before every route.

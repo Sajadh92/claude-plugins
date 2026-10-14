@@ -19,10 +19,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 try:
-    from abofles_hook import context_tokens, context_marks, newest_transcript, newest_state
+    from abofles_hook import label, context_tokens, context_marks, newest_transcript, newest_state, newest_session_id, usd, fmt_tokens, fmt_usd, PRICE_USD
 except Exception:  # pragma: no cover
     context_tokens = context_marks = newest_transcript = None
     newest_state = lambda: {}
+    newest_session_id = lambda: ""
+    label = lambda m, e=None: f"{m} · {e}" if e else m
+    usd = lambda m, u: 0.0
+    fmt_tokens = str
+    fmt_usd = lambda x: f"${x:.2f}"
+    PRICE_USD = {}
 
 LEDGER_DIR = Path(os.environ.get("ABOFLES_LEDGER_DIR", Path.home() / ".abofles" / "ledgers"))
 PRICE = {"haiku": 1, "sonnet": 20, "opus": 40, "fable": 100}
@@ -36,7 +42,10 @@ def cost(model, effort):
 
 def ledger_files(all_sessions):
     files = sorted(LEDGER_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
-    return files if all_sessions else files[-1:]
+    if all_sessions:
+        return files
+    mine = LEDGER_DIR / f"{newest_session_id()}.jsonl"  # this project's session, not whichever wrote last
+    return [mine] if mine.exists() else files[-1:]
 
 
 def load(files):
@@ -90,7 +99,7 @@ def main():
     bm, _, be = baseline.replace("-", "·").partition("·")
     if not be or "--assumed-effort" in args:
         be = newest_state().get("effort") or be
-    baseline = f"{bm}·{be or 'high'}"
+    baseline = label(bm, be or "high")
     files = ledger_files(all_sessions)
     if not files:
         print("abofles: no spawns logged yet.")
@@ -98,7 +107,7 @@ def main():
 
     if "--resolve" in args:
         key = args[args.index("--resolve") + 1]
-        f = files[-1]
+        f = ledger_files(False)[-1]  # this project's session
         rows = [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
         hit = [r for r in rows if (r.get("agent_id") or "").startswith(key)]
         if not hit:
@@ -119,12 +128,18 @@ def main():
     scope = "all sessions" if all_sessions else "this session"
 
     units = f"{total:.1f}" if total < 10 else f"{total:,.0f}"
-    print(f"Abo Fles (ابو فليس) — status, {scope}: {len(rows)} spawn{'' if len(rows) == 1 else 's'} · {units} u · saved {100 * (1 - total / base):.0f}% vs all-{baseline}")
+    real = [r for r in rows if r.get("tokens")]
+    if real:
+        tokens = sum(r["tokens"] for r in real); rcost = sum(r.get("usd") or 0 for r in real); rbase = sum(r.get("base_usd") or 0 for r in real)
+        pct = f" ({100 * (rbase - rcost) / rbase:.0f}%)" if rbase else ""
+        print(f"Abo Fles (ابو فليس) — status, {scope}: {len(rows)} spawn{'' if len(rows) == 1 else 's'} · {fmt_tokens(tokens)} tokens · {fmt_usd(rcost)} · saved {fmt_usd(rbase - rcost)}{pct} vs all {label(bm)}")
+    else:
+        print(f"Abo Fles (ابو فليس) — status, {scope}: {len(rows)} spawn{'' if len(rows) == 1 else 's'} · {units} u · saved {100 * (1 - total / base):.0f}% vs all {baseline}")
     if context_tokens and not all_sessions:
         tp = newest_transcript()
         tk = context_tokens(str(tp)) if tp else None
         if tk is not None:
-            marks = context_marks(os.getcwd())
+            marks = context_marks(newest_state().get("root") or os.getcwd())
             nxt = next((m for m in marks if tk < m * 1000), None)
             print(f"Context:    {tk // 1000}K tokens · " + (f"next compact warning at {nxt}K" if nxt else "past the last mark — run /abofles:memo, then /compact"))
     print()
@@ -132,9 +147,9 @@ def main():
     mx = max(by_model.values()) if by_model else 1
     for m in ("haiku", "sonnet", "opus", "fable"):
         if by_model.get(m):
-            print(f"  {m:<7}{bar(by_model[m], 24, mx)} {by_model[m]}")
+            print(f"  {label(m):<11}{bar(by_model[m], 24, mx)} {by_model[m]}")
     print()
-    print("Sides:      " + "  ".join(f"{s} {by_side[s]}" for s in ("Read", "Analyse", "Plan", "Work", "Verify") if by_side.get(s)))
+    print("Sides:      " + "  ".join(f"{s} {by_side[s]}" for s in ("Read", "Analyse", "Plan", "Work", "Verify", "Judge", "Explain") if by_side.get(s)))
     print("Confidence: " + "  ".join(f"{c} {n}" for c, n in conf.most_common()))
     pend = sum(1 for r in rows if r.get("status") == "pending")
     if pend:

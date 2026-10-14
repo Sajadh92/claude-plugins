@@ -1,5 +1,5 @@
 ---
-description: "Show what this session's subagents cost in relative units, and what Abo Fles saved versus running them all on one model"
+description: "Show what this session's subagents cost — the unit index per model and side, and the real tokens and dollars — and what Abo Fles saved versus running them all on one model"
 argument-hint: "[--all]"
 allowed-tools: Bash(python3 *)
 ---
