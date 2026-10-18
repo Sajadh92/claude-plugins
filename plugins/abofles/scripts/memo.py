@@ -103,7 +103,7 @@ def main():
             print("usage: memo.py now < text")
             return
         memo_now(cwd, text, sid)
-        print(memo_path(cwd))
+        print(session_memo_path(cwd, sid))  # where the Now section went
     else:
         print(__doc__)
 

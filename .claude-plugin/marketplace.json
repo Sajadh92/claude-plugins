@@ -9,7 +9,7 @@
       "name": "abofles",
       "source": "./plugins/abofles",
       "description": "Abo Fles (ابو فليس) counts every token: routes each subagent to the right model and effort, caps agents per task, judges questions before they reach you, and keeps a work memo.",
-      "version": "1.5.0"
+      "version": "1.5.1"
     },
     {
       "name": "abofles-guide",
