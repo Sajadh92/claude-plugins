@@ -2,6 +2,10 @@
 
 All notable changes to the plugins in this marketplace.
 
+## abofles 1.5.2 — 2026-10-19
+
+- Docs: the READMEs now say how to turn on auto-update for the `sajadh92` marketplace (off by default for third-party marketplaces) and how to update by hand.
+
 ## abofles 1.5.1 — 2026-10-19
 
 - abofles: `memo.py now` (what `/abofles:memo` runs) prints the session file it wrote, `.claude/abofles-memo.d/<session>.md`, not the main memo path — as the command's reply line says.

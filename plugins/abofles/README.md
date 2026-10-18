@@ -64,6 +64,18 @@ Then add one line to `~/.claude/CLAUDE.md` so every session routes before it spa
 - Always use the abofles skill before spawning subagents, and at the start of each coding task to check the main session model.
 ```
 
+### Updates
+
+Auto-update is off by default for third-party marketplaces. Turn it on once: run `/plugin`, open **Marketplaces**, pick `sajadh92`, choose **Enable auto-update**. Claude Code then installs each new version at startup.
+
+To update by hand instead:
+
+```
+/plugin marketplace update sajadh92
+```
+
+Then restart Claude Code.
+
 Optional: pick `abofles:Receipt` in the output-style picker (session `⋯` menu → Output style) for the compact progress line + receipt format.
 
 ## Quick start — what a task looks like

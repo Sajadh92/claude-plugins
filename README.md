@@ -15,6 +15,18 @@ A Claude Code plugin marketplace.
 /plugin install abofles-guide@sajadh92   # optional: the band above the prompt box
 ```
 
+## Updates
+
+Auto-update is off by default for third-party marketplaces. Turn it on once: run `/plugin`, open **Marketplaces**, pick `sajadh92`, choose **Enable auto-update**. Claude Code then installs each new version at startup.
+
+To update by hand instead:
+
+```
+/plugin marketplace update sajadh92
+```
+
+Then restart Claude Code.
+
 Then add to `~/.claude/CLAUDE.md`: `- Always use the abofles skill before spawning subagents, and at the start of each coding task to check the main session model.`
 
 See [plugins/abofles/README.md](plugins/abofles/README.md) for a quick start, the override block and the full matrix. Changes: [CHANGELOG.md](CHANGELOG.md). License: MIT.
