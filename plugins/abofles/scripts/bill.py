@@ -13,16 +13,18 @@ of work. These are relative numbers for comparing routes, not dollars.
 """
 import json
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 try:
-    from abofles_hook import label, newest_state, newest_session_id, usd, fmt_tokens, fmt_usd, PRICE_USD
+    from abofles_hook import label, newest_state, newest_session_id, usd, fmt_tokens, fmt_usd, PRICE_USD, session_arg
 except Exception:  # pragma: no cover
-    newest_state = lambda: {}
-    newest_session_id = lambda: ""
+    newest_state = lambda *a, **k: {}
+    newest_session_id = lambda *a, **k: ""
+    session_arg = lambda argv, keep=False: None
     label = lambda m, e=None: f"{m} · {e}" if e else m
     usd = lambda m, u: 0.0
     fmt_tokens = str
@@ -40,13 +42,16 @@ def cost(model, effort):
     return PRICE.get(model, 40) * EFFORT.get(effort, 1.5)
 
 
-def load(all_sessions):
-    files = sorted(LEDGER_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
-    if not files:
-        return []
-    if not all_sessions:
-        mine = LEDGER_DIR / f"{newest_session_id()}.jsonl"  # this project's session, not whichever wrote last
-        files = [mine] if mine.exists() else files[-1:]
+def load(all_sessions, sess=None):
+    if all_sessions:
+        files = sorted(LEDGER_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+    else:  # this project's session only (state root == cwd), never the newest ledger of another project
+        files = []
+        for c in (os.environ.get("ABOFLES_SESSION"), sess, newest_session_id(os.getcwd(), sess)):
+            c = "" if "${" in (c or "") else re.sub(r"[^A-Za-z0-9_-]", "", c or "")
+            if c and (LEDGER_DIR / f"{c}.jsonl").exists():
+                files = [LEDGER_DIR / f"{c}.jsonl"]
+                break
     rows = []
     for f in files:
         for line in f.read_text().splitlines():
@@ -59,6 +64,9 @@ def load(all_sessions):
 
 def main():
     args = sys.argv[1:]
+    if args[-2:] == ["--session", ""]:  # a command whose ${CLAUDE_SESSION_ID} expanded to nothing
+        del args[-2:]
+    sess = session_arg(args)
     all_sessions = "--all" in args
     baseline = "opus·high"
     if "--baseline" in args:
@@ -67,13 +75,13 @@ def main():
     bm, _, be = baseline.replace("-", "·").partition("·")
     from_session = False
     if not be or assumed:
-        se = newest_state().get("effort")
+        se = newest_state(os.getcwd(), sess).get("effort")
         if se:
             be, assumed, from_session = se, False, True
     baseline = label(bm, be or "high")
-    rows = load(all_sessions)
+    rows = load(all_sessions, sess)
     if not rows:
-        print("abofles: no spawns logged yet.")
+        print("abofles: no spawns logged yet." if all_sessions else "abofles: no ledger for this session yet")
         return
 
     by_model = Counter()

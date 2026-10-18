@@ -49,6 +49,10 @@ def main():
         os.environ["ABOFLES_USER_CLAUDE_MD"] = str(Path(state, "no-user-claude.md"))
         os.environ.pop("ABOFLES_RECEIPT", None)
         Path(cwd, "src").mkdir(); Path(cwd, "src/a.cs").write_text("x\n" * 30)
+        def pin(sid=None):  # the scripts pick the session for a command: ABOFLES_SESSION, else the newest prompt among this folder's sessions
+            os.environ.pop("ABOFLES_SESSION", None)
+            if sid: os.environ["ABOFLES_SESSION"] = sid
+        pin()
         reason = lambda out: (out or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
         allowed = lambda out: out is None or (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "allow"  # the first spawn of a task may carry the `main:` line
         ctx = lambda out: (out or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
@@ -174,7 +178,7 @@ def main():
         out = run("receipt", {"session_id": "rc", "stop_hook_active": True, "last_assistant_message": "still none"}, led)
         check("receipt: stop_hook_active -> no second block", out is None)
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rc"), led)
-        out = run("receipt", {"session_id": "rc", "stop_hook_active": False, "last_assistant_message": "── receipt ──\ndone   x\nwhy    y\nspend  1 spawn · 0.5 u\ncheck  cmd\nopen   none"}, led)
+        out = run("receipt", {"session_id": "rc", "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 0.5 u · Saved 99%** vs Opus 5.5\n- `done` → x\n- `check` → cmd\n- `open` → none"}, led)
         check("receipt: present -> allowed", out is None)
         out = run("receipt", {"session_id": "rc", "stop_hook_active": False, "last_assistant_message": "just an answer, no spawns this turn"}, led)
         check("receipt: no spawns this turn -> allowed", out is None)
@@ -203,6 +207,7 @@ def main():
         check("receipt: off in user CLAUDE.md -> no note", rn(out) == "")
         check("receipt: off -> Stop does not block", run("receipt", {"session_id": "rm", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "done."}, led) is None)
         Path(state, "no-user-claude.md").unlink()
+        run("prompt", {"session_id": "rm", "cwd": cwd, "prompt": "next job"}, led)  # no receipt was wanted: the task closes at the next real prompt
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rm"), led)
         out = (run("receipt", {"session_id": "rm", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "done."}, led) or {}).get("reason", "")
         check("receipt: missing -> block carries the computed header", "🧾 **1 Spawn · 0.5 u · Saved 99%**" in out)
@@ -243,7 +248,7 @@ def main():
         out = run("receipt", {"session_id": "tk", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "done."}, led)
         check("tokens: Stop header sums sync + background", "🧾 **2 Spawns · 1.6M Tokens · $0.43 · Saved 61% ($0.68)** vs Opus 5.5" in (out or {}).get("reason", ""))
         check("tokens: the dominant spawn is named", "largest: Read Haiku 5.5 · Low $0.28 (65%)" in (out or {}).get("reason", ""))
-        run("receipt", {"session_id": "tk", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": True, "last_assistant_message": "x"}, led)  # the nudge was spent: task closed
+        run("receipt", {"session_id": "tk", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": True, "last_assistant_message": "🧾 **2 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x"}, led)  # a printed receipt closes the task
         # main session on fable: baseline priced at fable
         with open(tr, "a") as f:
             f.write(json.dumps({"type": "assistant", "message": {"model": "claude-fable-5-1", "usage": {"input_tokens": 1, "cache_read_input_tokens": 1, "cache_creation_input_tokens": 0, "output_tokens": 1}}}) + "\n")
@@ -419,8 +424,10 @@ def main():
         import subprocess as _sp2
         AG = Path(__file__).resolve().parent / "agents.py"
         ag = lambda *a: _sp2.run([sys.executable, str(AG), *a], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led)).stdout
+        pin("ag2")
         check("gate: agents.py set 5", "agents: 5 this task" in ag("set", "5") and json.loads(Path(state, "ag2.json").read_text()).get("task_budget") == 5)
         check("gate: agents.py show", "0 of budget 5 used (your answer for this task)" in ag())
+        pin()
         # question gate: AskUserQuestion denied until a judge (ASK) / explainer unlocked it; ANSWERED logged; HANDOFF chain
         run("start", {"session_id": "qg", "cwd": cwd, "transcript_path": str(tr)}, led)
         json.dump(dict(json.loads(Path(state, "qg.json").read_text()), gate="auto"), open(Path(state, "qg.json"), "w"))
@@ -432,7 +439,7 @@ def main():
         jp = lambda tier, resp: dict(agent("sonnet", "medium", "abofles:abofles-judge", prompt=f"abofles: Pricing, Fees, Commission & Tax / Judge · T{tier}\nq\nLine cap: 40", resp=resp, cwd=cwd), session_id="qg", transcript_path=str(tr))
         ask = "STATUS: done\nCONFIDENCE: high\nVERDICT: ASK\nQUESTION: Should the cap apply per unit or per order?\nEVIDENCE:\n- src/a.cs:10 — cap read here\nWHY: per order lets a 10-unit order pass uncapped\nOPTIONS:\n- Per unit — means: x · then: y · pick when: z\nRECOMMEND: Per unit — matches the Jira AC"
         check("qgate: judge spawn is allowed with budget 0 (exempt)", run("pre", dict(jp(2, None), tool_input=dict(jp(2, None)["tool_input"])), led) is None)
-        out = run("post", jp(2, ask), led)
+        out = run("post", dict(jp(2, ask), tool_input=dict(jp(2, ask)["tool_input"], name="judge-q")), led)  # spawned with a name: SendMessage `to` can use it
         check("qgate: judge ASK unlocks and instructs", "question judged" in ctx(out) and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 1)
         check("qgate: judged question allowed once", run("qgate", aq, led) is None and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 0)
         check("qgate: the same round again (reworded) passes without a second judge", run("qgate", dict(aq, tool_input={"questions": [{"question": "Should the cap be in IQD only, or per currency?", "options": []}]}), led) is None)
@@ -444,8 +451,9 @@ def main():
         check("qgate: gate text puts WHY/EXPLAIN inside the question and asks for a Language line", "question text = QUESTION" in reason(run("qgate", aq2, led)) and "Language:" in reason(run("qgate", aq2, led)))
         # SendMessage to a gate agent unlocks one question
         check("qgate: SendMessage to a non-gate agent does nothing", run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "worker-7", "message": "m"}}, led) is None)
-        out = run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "abofles-explainer", "message": "reword in Arabic"}}, led)
-        check("qgate: SendMessage to an explainer unlocks", "unlocked" in ctx(out) and run("qgate", aq2, led) is None)
+        check("qgate: SendMessage to the agent TYPE name unlocks nothing (an id or the spawn name is needed)", run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "abofles-judge", "message": "m"}}, led) is None)
+        out = run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "judge-q", "message": "reword in Arabic"}}, led)
+        check("qgate: SendMessage to a gate agent this session spawned unlocks", "unlocked" in ctx(out) and run("qgate", aq2, led) is None)
         ans = "STATUS: done\nCONFIDENCE: high\nVERDICT: ANSWERED\nQUESTION: Is the cap per unit?\nANSWER: Yes, per unit\nEVIDENCE:\n- src/a.cs:12 — cap applied inside the unit loop"
         out = run("post", jp(2, ans), led)
         check("qgate: T2 ANSWERED -> decision logged, no needs-you, no unlock", "judge ANSWERED from evidence" in ctx(out) and "judge: Is the cap per unit? → Yes, per unit (src/a.cs:12" in mf.read_text() and "judge decided" not in mf.read_text() and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 0)
@@ -468,6 +476,7 @@ def main():
         # 1. memo and overrides follow the project root, not the per-event cwd (a `cd` into a nested repo)
         nested = Path(cwd, "DCMP.BE"); nested.mkdir(exist_ok=True)
         run("start", {"session_id": "rt", "cwd": cwd, "transcript_path": str(tr)}, led)
+        pin("rt")
         check("root: SessionStart fixes the root", json.loads(Path(state, "rt.json").read_text()).get("root") == cwd)
         run("start", {"session_id": "rt", "cwd": str(nested), "transcript_path": str(tr), "source": "compact"}, led)
         check("root: a compact in a nested folder keeps the root", json.loads(Path(state, "rt.json").read_text()).get("root") == cwd)
@@ -599,8 +608,24 @@ def main():
         for _ in range(3): g("Read", {})
         check("guard: wc is not a read", g("Bash", {"command": "wc -l a.cs"}) is None and json.loads(Path(state, "gd.json").read_text()).get("direct_reads") == 0)
         for _ in range(3): g("Read", {})
-        check("guard: a Jira lookup counts as the 4th read", "4 direct reads" in ctx(g("mcp__atlassian__getJiraIssue", {"issueKey": "DCMP-1"})))
-        check("guard: a connector write neither counts nor breaks", g("mcp__atlassian__editJiraIssue", {}) is None and json.loads(Path(state, "gd.json").read_text()).get("direct_reads") == 4)
+        dr = lambda: json.loads(Path(state, "gd.json").read_text()).get("direct_reads")
+        check("guard: the first 2 fetch-by-key reads (getJiraIssue) are free — no count, no warning", g("mcp__atlassian__getJiraIssue", {"issueKey": "DCMP-1"}) is None and g("mcp__atlassian__getJiraIssue", {"issueKey": "DCMP-2"}) is None and dr() == 3)
+        check("guard: the 3rd fetch-by-key read counts as the 4th read", "4 direct reads" in ctx(g("mcp__atlassian__getJiraIssue", {"issueKey": "DCMP-3"})) and dr() == 4)
+        check("guard: a connector write neither counts nor breaks", g("mcp__atlassian__editJiraIssue", {}) is None and dr() == 4)
+        g("mcp__atlassian__searchJiraIssuesUsingJql", {"jql": "x"})
+        check("guard: a search connector read always counts", dr() == 5)
+        run("start", {"session_id": "gd2", "cwd": cwd, "transcript_path": str(tr)}, led)
+        g2 = lambda tool: run("guard", {"session_id": "gd2", "cwd": cwd, "tool_name": tool, "tool_input": {}}, led)
+        for _ in range(2): g2("Read")
+        free = [g2(n) for n in ("mcp__atlassian__getConfluencePage", "mcp__x__getWikiPage", "mcp__atlassian__getConfluenceSpaces")]
+        check("guard: getConfluencePage and get*Page are fetch-by-key too (2 free, the 3rd counts)", free[:2] == [None, None] and json.loads(Path(state, "gd2.json").read_text()).get("direct_reads") == 3 and json.loads(Path(state, "gd2.json").read_text()).get("connector_free") == 2)
+        run("start", {"session_id": "gd3", "cwd": cwd, "transcript_path": str(tr)}, led)
+        g3 = lambda tool: run("guard", {"session_id": "gd3", "cwd": cwd, "tool_name": tool, "tool_input": {}}, led)
+        for n_ in ("mcp__atlassian__getConfluencePages", "mcp__atlassian__searchConfluence", "mcp__atlassian__getConfluenceSpaces", "mcp__atlassian__listConfluencePages"): g3(n_)
+        s3_ = json.loads(Path(state, "gd3.json").read_text())
+        check("guard: Confluence listings and searches (…Pages, search…, …Spaces) are never free — all count, connector_free stays 0", s3_.get("direct_reads") == 4 and not s3_.get("connector_free"))
+        g3("mcp__atlassian__getConfluenceContent")
+        check("guard: getConfluenceContent (one page by key) is free", json.loads(Path(state, "gd3.json").read_text()).get("connector_free") == 1)
         # 9. partial with GAPS none -> done; judge/explainer long lines not nagged
         out = run("post", dict(agent("haiku", "low", resp="STATUS: partial\nCONFIDENCE: high\nFACTS:\n- src/a.cs:1 — x\n+3 more: a; b; c\nGAPS: none", cwd=cwd), session_id="gd"), led)
         check("analyze: partial + GAPS none -> done, no escalation", "upgraded to done" in ctx(out) and "escalation rule" not in ctx(out))
@@ -642,17 +667,19 @@ def main():
         run("receipt", {"session_id": "msA", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → session A built the cap\n- `check` → y\n- `open` → owner decision: A's cap rule?"}, led)
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="msB"), led)
         run("receipt", {"session_id": "msB", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → session B wrote the docs\n- `check` → y"}, led)
-        memo("now", inp="Task      B: docs ticket\nNext      B: merge docs\n")  # newest state is msB
-        Path(state, "msA.json").touch()
+        pin("msB")
+        memo("now", inp="Task      B: docs ticket\nNext      B: merge docs\n")
+        pin("msA")
         memo("now", inp="Task      A: cap ticket\nNext      A: verify cap\n")
         txt = mf.read_text()
         check("multi: Now holds one block per session", txt.count("Session   ms") == 2 and "A: cap ticket" in txt and "B: docs ticket" in txt)
         check("multi: journal lines and Needs-you items carry the session tag", "s:msA · " in txt and "s:msB · " in txt and "(s:msA)" in txt)
         blkA = memo("show")
         check("multi: resume shows this session's Now and receipts only", "session msA" in blkA.splitlines()[0] and "- `now` → A: cap ticket" in blkA and "B: docs" not in blkA.split("- `last`")[0] and "session A built the cap" in blkA and "session B wrote the docs" not in blkA)
-        Path(state, "msB.json").touch()
+        pin("msB")
         blkB = memo("show")
         check("multi: the other session sees its own block", "- `now` → B: docs ticket" in blkB and "A: cap" not in blkB.split("- `last`")[0])
+        pin()
         run("start", {"session_id": "msC", "cwd": cwd, "transcript_path": str(tr)}, led)
         blkC = run("start", {"session_id": "msC", "cwd": cwd, "transcript_path": str(tr)}, led)
         check("multi: a new session is told the Now blocks belong to other sessions", "no Now section from this session yet" in blkC and "their work, not yours" in blkC and "session ms" in blkC)
@@ -679,6 +706,7 @@ def main():
         check("guide: an escalate item resolves with a --trace and unresolves through status.py",
               yi.get("resolve", [])[1:] == [str(STx), "--resolve", "es1abc", "--session", "gu", "--trace", yi.get("resolve", ["", "", "", "", "", "", ""])[-1]] and yi["resolve"][-1].startswith("Read ")
               and (yi.get("unresolve") or [])[:7] == [sys.executable, str(STx), "--unresolve", "es1abc", "--session", "gu", "--trace"] and yi.get("recheck") is None)
+        pin("gu")
         genv = dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)
         rr = _sp.run(yi["resolve"], cwd=cwd, capture_output=True, text=True, env=genv)
         check("trace: status --resolve --trace settles the row", rr.returncode == 0 and "resolved 1 entry" in rr.stdout)
@@ -733,9 +761,11 @@ def main():
         check("guide: Guide = off -> no next line", "`next` →" not in ctx(out))
         Path(cwd, "CLAUDE.md").unlink()
         # several open sessions: the CLIs pick the one whose cwd is this project
+        pin()
         other = Path(cwd, "other-project"); other.mkdir(exist_ok=True)
         run("start", {"session_id": "sessA", "cwd": cwd, "transcript_path": str(tr)}, led)
         run("start", {"session_id": "sessB", "cwd": str(other), "transcript_path": str(tr)}, led)  # newest by mtime
+        run("prompt", {"session_id": "sessA", "cwd": cwd, "prompt": "hello"}, led)  # a prompt makes sessA the one this folder types in
         check("cli: agents.py acts on this project's session, not the newest", "agents: 4 this task" in ag("set", "4") and json.loads(Path(state, "sessA.json").read_text()).get("task_budget") == 4 and json.loads(Path(state, "sessB.json").read_text()).get("task_budget") is None)
         # SubagentStop carries agent_transcript_path: used for pricing
         run("post", dict(pi, session_id="sessA", tool_response={"status": "async_launched", "agentId": "tp1", "prompt": "p", "description": "t"}), led)
@@ -887,7 +917,7 @@ def main():
         say("text", TBL)
         run("qgate", xq(XQ1), led)
         say("text", "the user answered in Other: print the table again")
-        run("sendmsg", {"session_id": "xa", "cwd": cwd, "transcript_path": str(tr), "tool_name": "SendMessage", "tool_input": {"to": "abofles-explainer", "message": "same round, reworded"}}, led)
+        run("sendmsg", {"session_id": "xa", "cwd": cwd, "transcript_path": str(tr), "tool_name": "SendMessage", "tool_input": {"to": "abofles-judge", "message": "same round, reworded"}}, led)
         out = run("qgate", xq("Cap per unit or per order (translated)? 📖 the table is above"), led)
         check("explain gate (b): a re-ask unlocked by SendMessage is refused until the table is printed again, block handed back", "not printed" in reason(out) and "| Per unit | capped |" in reason(out))
         run("start", {"session_id": "xc", "cwd": cwd, "transcript_path": str(tr)}, led)
@@ -982,6 +1012,312 @@ def main():
         iditems = {i["id"]: i for i in gitems(sI)}
         check("guide ids: fail:<agent>, ask, dec:<n>, bg:<agent>, ctx:<mark>, budget on their items", {"fail:vfx111", "ask", "dec:1", "bg:bgx111", "ctx:500", "budget"} <= set(iditems))
         check("guide ids: the owner-decision resolve/reopen argv carries --session <sid>", (iditems.get("dec:1", {}).get("resolve") or [])[-2:] == ["--session", sI] and (iditems.get("dec:1", {}).get("unresolve") or [])[-2:] == ["--session", sI])
+        # ── Batch A: the graded reply text, header-aware replies, exact gate agents, stale unlocks, lost agents ──
+        setst = lambda sid_, **kw: json.dump(dict(gstate(sid_), **kw), open(Path(state, f"{sid_}.json"), "w"))
+        ledrows = lambda sid_: [json.loads(l) for l in Path(led, f"{sid_}.jsonl").read_text().splitlines() if l.strip()]
+        askp = lambda sid_: dict(aq, session_id=sid_)  # AskUserQuestion payload of that session
+        jpa = lambda sid_, resp, stype="abofles:abofles-judge", hdr="Judge", tier=2, **kw: dict(agent("sonnet", "medium", stype, prompt=f"abofles: BatchA / {hdr} · T{tier}\nq\nLine cap: 40", resp=resp, cwd=cwd), session_id=sid_, transcript_path=str(tr), **kw)
+        launch_ = lambda aid_: {"status": "async_launched", "agentId": aid_, "prompt": "p", "description": "t"}
+        for sx_ in ("ba1", "ba2", "ba3", "ba4", "ba5", "ba6", "ba7", "ba8", "ba9", "ba10", "ba11", "ba12"):
+            run("start", {"session_id": sx_, "cwd": cwd, "transcript_path": str(tr)}, led)
+            setst(sx_, gate="auto")
+        time.sleep(1.1)  # rows of the task are those after the task start second
+        # 1. harness notes are not the agent's reply
+        hnote = "[harness: subagent output matched instruction-shaped pattern(s) " + "word " * 80 + "]"
+        blk = lambda t: {"type": "text", "text": t}
+        hresp = {"agentId": "hn1", "agentType": "abofles:abofles-reader", "content": [blk(hnote), blk(good)], "harnessNoteCount": 1, "harnessTailCount": 0, "status": "completed", "usage": {}, "totalTokens": 9}
+        out = run("post", dict(agent("haiku", "low", resp=hresp, cwd=cwd), session_id="ba1"), led)
+        check("reply: a harness note block is dropped from the graded reply — no too-long warning", "too long" not in ctx(out) and warn(out) == "")
+        check("reply_text: head and tail counts drop blocks, a `[harness:` block goes without a count, str/list inputs still work",
+              H.reply_text(dict(hresp, harnessNoteCount=1)) == good and H.reply_text(dict(hresp, harnessNoteCount=0, content=[blk(good), blk(hnote)])) == good
+              and H.reply_text(dict(hresp, harnessNoteCount=0, harnessTailCount=1, content=[blk(good), blk("trailer")])) == good
+              and H.reply_text({"content": [blk(hnote), blk("x")]}) == "x" and H.reply_text("plain") == "plain" and H.reply_text([blk("a"), blk("b")]) == "a\nb" and H.reply_text(None) == "")
+        check("has_header: STATUS / VERDICT / EXPLAIN lines, leading spaces allowed; a stub has none",
+              H.has_header("x\n  STATUS: done") and H.has_header("VERDICT: ASK") and H.has_header("a\nEXPLAIN:\nb") and not H.has_header("Understood. STATUS: done soon") and not H.has_header(""))
+        # 2. get_reply: header hint wins, else the agent's own transcript, else the stub, else nothing
+        REAL = "STATUS: done\nCONFIDENCE: high\nFACTS:\n- src/a.cs:1 — x\nGAPS: none"
+        gdir = Path(cwd, "ba2", "subagents"); gdir.mkdir(parents=True, exist_ok=True)
+        gline = lambda t: json.dumps({"type": "assistant", "message": {"id": f"g{time.time()}", "content": [{"type": "text", "text": t}]}}) + "\n"
+        gtr = Path(gdir, "agent-gx1.jsonl"); gtr.write_text(gline("working") + gline(REAL) + gline("Understood."))
+        gst_ = {"transcript_path": str(Path(cwd, "main.jsonl"))}
+        check("get_reply: a hint with a header wins over the transcript", H.get_reply(gst_, "ba2", "gx1", "STATUS: partial\nCONFIDENCE: low") == ("STATUS: partial\nCONFIDENCE: low", "hint"))
+        check("get_reply: a stub hint falls back to the newest transcript text that has a header", H.get_reply(gst_, "ba2", "gx1", "Understood.") == (REAL, "transcript"))
+        check("get_reply: no transcript -> the stub as it is; nothing at all -> no_reply", H.get_reply(gst_, "ba2", "nope", "Understood.") == ("Understood.", "stub") and H.get_reply(gst_, "ba2", "nope", "") == ("", "no_reply") and H.get_reply(gst_, "ba2", None, "  ") == ("", "no_reply"))
+        check("last_assistant_reply: the real report wins over a short stub written after it", H.last_assistant_reply(gtr) == (REAL, False))
+        gtr2 = Path(gdir, "agent-gx2.jsonl"); gtr2.write_text(gline(REAL) + gline("one") + gline("two") + gline("three"))
+        check("get_reply: only the newest 2 assistant messages are searched — an older report is not taken (stub as it is)", H.get_reply(gst_, "ba2", "gx2", "Understood.") == ("Understood.", "stub"))
+        gtr3 = Path(gdir, "agent-gx3.jsonl"); gtr3.write_text(gline(REAL) + json.dumps({"type": "assistant", "message": {"id": "hb", "content": [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": "Understood."}}]}}) + "\n")
+        check("last_assistant_reply: the headed report is returned with the NEWEST message's hand-back flag", H.last_assistant_reply(gtr3) == (REAL, True))
+        run("post", dict(agent("haiku", "low", resp=launch_("gx1"), cwd=cwd), session_id="ba2"), led)
+        run("stop", {"session_id": "ba2", "agent_id": "gx1", "agent_transcript_path": str(gtr), "last_assistant_message": "Understood."}, led)
+        grow = next(r for r in ledrows("ba2") if r.get("agent_id") == "gx1")
+        check("stop: a stub last message is graded from the transcript's real report", grow.get("status") == "done" and grow.get("confidence") == "high" and grow.get("how") == "transcript")
+        run("post", dict(agent("haiku", "low", resp=launch_("nr1"), cwd=cwd), session_id="ba3"), led)
+        run("stop", {"session_id": "ba3", "agent_id": "nr1", "last_assistant_message": ""}, led)
+        run("prompt", {"session_id": "ba3", "cwd": cwd, "transcript_path": str(tr)}, led)
+        nrow = next(r for r in ledrows("ba3") if r.get("agent_id") == "nr1")
+        check("stop: no reply text -> row closed how=no_reply, and the guide raises no escalate item for it", nrow.get("how") == "no_reply" and nrow.get("completed_ts") and gitems("ba3") and not any(i["p"] == "🟡" for i in gitems("ba3")))
+        # 3. every judge block counts; a stub or an empty EXPLAIN never unlocks
+        two = "STATUS: done\nCONFIDENCE: high\nVERDICT: ANSWERED\nQUESTION: Is the cap per unit?\nANSWER: Yes\nEVIDENCE:\n- src/a.cs:12 — loop\nVERDICT: ASK\nQUESTION: Per unit or per order?\nEVIDENCE:\n- src/a.cs:10 — cap read here\nWHY: w\nOPTIONS:\n- A — means: m · then: t · pick when: p\nRECOMMEND: A — r"
+        run("post", jpa("ba4", two), led)
+        check("gate reply: ANSWERED then ASK in one sync reply unlocks one question", gstate("ba4").get("judge_ok") == 1 and gstate("ba4").get("judge_ok_ts"))
+        run("post", jpa("ba5", launch_("bj5")), led)
+        run("stop", {"session_id": "ba5", "agent_id": "bj5", "last_assistant_message": two}, led)
+        check("gate reply: ANSWERED then ASK from a background judge unlocks too (the ASK is not lost)", gstate("ba5").get("judge_ok") == 1 and next(r for r in ledrows("ba5") if r.get("agent_id") == "bj5").get("verdict") == "ASK")
+        out = run("post", jpa("ba6", "Understood, I will check the cap."), led)
+        check("gate reply: a judge stub with no VERDICT stays locked and warns", gstate("ba6").get("judge_ok", 0) == 0 and "no VERDICT" in ctx(out) and "question gate" in reason(run("qgate", askp("ba6"), led)))
+        run("post", jpa("ba6", launch_("bj6")), led)
+        run("stop", {"session_id": "ba6", "agent_id": "bj6", "last_assistant_message": "Understood."}, led)
+        check("gate reply: the same stub from a background judge stays locked", gstate("ba6").get("judge_ok", 0) == 0 and any("no VERDICT" in w for w in next(r for r in ledrows("ba6") if r.get("agent_id") == "bj6").get("warnings") or []))
+        exreply = lambda ex_: "STATUS: done\nCONFIDENCE: high\nQUESTION: q\nWHY: w\nOPTIONS:\n- A — means: m · then: t · pick when: p\nRECOMMEND: A — r\nEXPLAIN:" + ex_
+        out = run("post", jpa("ba7", exreply("\n• A: m → t"), "abofles:abofles-explainer", "Explain", 3), led)
+        check("gate reply: an explainer with an EXPLAIN unlocks", gstate("ba7").get("judge_ok") == 1)
+        out = run("post", jpa("ba7", exreply(""), "abofles:abofles-explainer", "Explain", 3), led)
+        check("gate reply: an explainer with a QUESTION but no EXPLAIN unlocks (EXPLAIN is optional)", gstate("ba7").get("judge_ok") == 2 and "stays locked" not in ctx(out))
+        out = run("post", jpa("ba7", "Understood, I will explain it.", "abofles:abofles-explainer", "Explain", 3), led)
+        check("gate reply: an explainer stub with no QUESTION line stays locked and warns", gstate("ba7").get("judge_ok") == 2 and "no QUESTION line" in ctx(out))
+        # 4. which agents are gate agents
+        check("is_gate_agent: exact abofles types (full or bare name) yes; a project agent named decision-judge no",
+              H.is_gate_agent("abofles:abofles-judge", "") == "judge" and H.is_gate_agent("abofles-explainer", "") == "explain" and H.is_gate_agent("abofles:abofles-explainer", "x") == "explain"
+              and H.is_gate_agent("decision-judge", "abofles: X / Read · T2\nq") is None and H.is_gate_agent("my-explainer", "") is None and H.is_gate_agent("abofles:abofles-worker", "abofles: X / Work · T2") is None)
+        check("is_gate_agent: any other type counts only through the prompt header side",
+              H.is_gate_agent("general-purpose", "abofles: X / Judge · T2\nq") == "judge" and H.is_gate_agent("general-purpose", "abofles: X / Explain · T3\nq") == "explain" and H.is_gate_agent("general-purpose", "do it") is None)
+        check("side_of: no substring match of judge/explain on a non-abofles type; abofles types and the header side still resolve",
+              H.side_of("decision-judge") == ("", "?") and H.side_of("abofles:abofles-judge") == ("judge", "Judge") and H.side_of("abofles-worker") == ("worker", "Work")
+              and H.side_of("decision-judge", "abofles: X / Verify · T2\nq") == ("verifier", "Verify") and H.side_of("my-reader", "") == ("", "?"))
+        out = run("post", jpa("ba8", ask, "decision-judge", "Read"), led)
+        check("gate agent: decision-judge replying ASK does not unlock the gate", gstate("ba8").get("judge_ok", 0) == 0 and "question judged" not in ctx(out) and not gstate("ba8").get("gate_agents"))
+        out = run("post", jpa("ba9", ask, "general-purpose", "Judge"), led)
+        check("gate agent: general-purpose with a `/ Judge` header is a gate agent and unlocks", gstate("ba9").get("judge_ok") == 1 and "question judged" in ctx(out) and next(r for r in ledrows("ba9")).get("gate") == "judge")
+        out = run("post", jpa("ba9", longq, "general-purpose", "Judge"), led)
+        check("analyze: a general-purpose `/ Judge` spawn is graded as a judge — no long-line nag", "too long" not in ctx(out) and "absolute paths" not in ctx(out))
+        # 5. SendMessage unlocks only for a gate agent this session spawned
+        sm = lambda sid_, to_: run("sendmsg", {"session_id": sid_, "cwd": cwd, "transcript_path": str(tr), "tool_name": "SendMessage", "tool_input": {"to": to_, "message": "m"}}, led)
+        check("sendmsg: an unknown id, and a name that merely contains judge, unlock nothing", sm("ba8", "decision-judge") is None and sm("ba8", "judge-7") is None and sm("ba8", "a1b2c3") is None and gstate("ba8").get("judge_ok", 0) == 0)
+        run("post", jpa("ba10", launch_("gj10")), led)
+        check("sendmsg: the id of a gate agent this session spawned still unlocks", "unlocked" in ctx(sm("ba10", "gj10")) and gstate("ba10").get("judge_ok") == 1 and gstate("ba10").get("judge_ok_ts"))
+        for sx_ in ("bc1", "bc2", "bc3"):
+            run("start", {"session_id": sx_, "cwd": cwd, "transcript_path": str(tr)}, led)
+            setst(sx_, gate="auto")
+        pn_ = jpa("bc3", {"agentId": "gj3", "content": ask})
+        run("post", dict(pn_, tool_input=dict(pn_["tool_input"], name="jq3")), led)
+        check("gate_agents: the agent id and the spawn name are recorded, not the type name", gstate("bc3").get("gate_agents") == ["gj3", "jq3"])
+        check("sendmsg: the type name unlocks nothing; the id and the spawn name do", sm("bc3", "abofles-judge") is None and gstate("bc3").get("judge_ok") == 1 and "unlocked" in ctx(sm("bc3", "jq3")) and "unlocked" in ctx(sm("bc3", "gj3")) and gstate("bc3").get("judge_ok") == 3)
+        # 6. stale unlocks
+        now_ = int(time.time())
+        ids_ = lambda sid_: [i.get("id") for i in gitems(sid_)]
+        setst("ba11", task_started=now_ - 5000, judge_ok=1, judge_ok_ts=now_ - 6000, gate_wait_ts=0)
+        run("prompt", {"session_id": "ba11", "cwd": cwd, "transcript_path": str(tr)}, led)
+        out = run("receipt", {"session_id": "ba11", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "done"}, led)
+        check("unlock: one made before the open task started is dropped — no 'unasked' item, no Stop demand, judge_ok cleared",
+              ids_("ba11") and "ask" not in ids_("ba11") and "judged question" not in (out or {}).get("reason", "") and gstate("ba11").get("judge_ok") == 0)
+        setst("ba12", task_started=now_ - 5000, judge_ok=1, judge_ok_ts=now_ - 60, gate_wait_ts=0)
+        run("prompt", {"session_id": "ba12", "cwd": cwd, "transcript_path": str(tr)}, led)
+        check("unlock: one inside GATE_WAIT and after the task start survives — the guide asks for the question", "ask" in ids_("ba12"))
+        out = run("receipt", {"session_id": "ba12", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "done"}, led)
+        check("unlock: ... and Stop demands it", "judged question is still unasked" in (out or {}).get("reason", "") and gstate("ba12").get("judge_ok") == 1)
+        setst("ba12", judge_ok=1, judge_ok_ts=now_ - H.GATE_WAIT - 100, gate_wait_ts=0)
+        run("prompt", {"session_id": "ba12", "cwd": cwd, "transcript_path": str(tr)}, led)
+        check("unlock: a judge reply (post/close_row) left unasked longer than GATE_WAIT stays live — the guide still asks", "ask" in ids_("ba12"))
+        out = run("receipt", {"session_id": "ba12", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "done"}, led)
+        check("unlock: ... and Stop still demands the question", "judged question is still unasked" in (out or {}).get("reason", ""))
+        setst("ba12", judge_ok=1, judge_ok_ts=now_ - H.GATE_WAIT - 100, gate_wait_ts=now_ - H.GATE_WAIT - 100)  # a SendMessage unlock whose reply never came
+        run("prompt", {"session_id": "ba12", "cwd": cwd, "transcript_path": str(tr)}, led)
+        check("unlock: a SendMessage unlock older than GATE_WAIT with no gate agent running is not live", "ask" not in ids_("ba12"))
+        check("qgate: ... and it lets no question through", "question gate" in reason(run("qgate", askp("ba12"), led)))
+        setst("ba12", judge_ok=1, judge_ok_ts=now_ - 6000, task_started=now_ - 5000, gate_wait_ts=0)
+        check("qgate: a stale unlock (made before the task began) lets no question through", "question gate" in reason(run("qgate", askp("ba12"), led)) and gstate("ba12").get("judge_ok") == 1)
+        setst("ba12", judge_ok=1, judge_ok_ts=now_ - 60, task_started=now_ - 5000, gate_wait_ts=0)
+        check("qgate: a live unlock lets exactly one question through", run("qgate", askp("ba12"), led) is None and gstate("ba12").get("judge_ok") == 0)
+        # 7. background spawns: run_in_background is async; a lost agent closes; an old task's pending row is not "running"
+        for sx_ in ("bb1", "bb2"):
+            run("start", {"session_id": sx_, "cwd": cwd, "transcript_path": str(tr)}, led)
+        out = run("post", dict(agent("haiku", "low", resp={"agentId": "rb2", "content": [blk(good)]}, cwd=cwd), session_id="bb1", tool_input=dict(agent("haiku", "low")["tool_input"], run_in_background=True)), led)
+        check("post: run_in_background=True is async when the result is not marked completed", next(r for r in ledrows("bb1") if r.get("agent_id") == "rb2").get("status") == "pending")
+        run("post", dict(agent("haiku", "low", resp={"status": "async_launched"}, cwd=cwd), session_id="bb2"), led)  # no agent id
+        run("post", dict(agent("haiku", "low", resp=launch_("ghost1"), cwd=cwd), session_id="bb2"), led)  # an id with no transcript
+        run("post", dict(agent("haiku", "low", resp=launch_("fresh1"), cwd=cwd), session_id="bb2"), led)
+        rws = ledrows("bb2")
+        rws[0]["ts"] = now_ - H.LOST_MIN * 60 - 60  # past LOST_MIN
+        rws[1]["ts"] = now_ - H.LOST_MIN * 60 - 60
+        rws[2]["ts"] = now_ - H.LOST_MIN * 60 + 120  # still inside it
+        Path(led, "bb2.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rws))
+        setst("bb2", task_started=now_ - H.LOST_MIN * 60 - 600)  # a long task: all three rows belong to it
+        run("prompt", {"session_id": "bb2", "cwd": cwd, "transcript_path": str(tr)}, led)
+        rws = ledrows("bb2")
+        check("stale: a pending row with no agent id / no transcript older than LOST_MIN closes as lost, no escalate item; a younger one stays pending",
+              [r.get("how") for r in rws[:2]] == ["lost", "lost"] and all(r.get("completed_ts") for r in rws[:2]) and rws[2].get("status") == "pending" and not any(i["p"] == "🟡" for i in gitems("bb2")))
+        check("guide: only a pending row at or after the task start counts as running", [i["text"][:2] for i in gitems("bb2") if i["p"] == "⏳"] == ["1 "] and "bg:fresh1" in ids_("bb2"))
+        rws[2]["ts"] = int(time.time()) - 5000  # now it belongs to an earlier task
+        setst("bb2", task_started=int(time.time()) - 100)
+        Path(led, "bb2.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rws))
+        run("prompt", {"session_id": "bb2", "cwd": cwd, "transcript_path": str(tr)}, led)
+        check("guide: a pending row from an earlier task is not counted as running", gitems("bb2") and not any(i["p"] == "⏳" for i in gitems("bb2")))
+        run("post", dict(agent("haiku", "low", resp=launch_("late1"), cwd=cwd), session_id="bc2"), led)
+        rl_ = ledrows("bc2"); rl_[0]["ts"] = now_ - H.LOST_MIN * 60 - 60
+        Path(led, "bc2.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rl_))
+        run("prompt", {"session_id": "bc2", "cwd": cwd, "transcript_path": str(tr)}, led)
+        check("stop: setup — the row with no transcript was closed as lost", ledrows("bc2")[0].get("how") == "lost")
+        run("stop", {"session_id": "bc2", "agent_id": "late1", "last_assistant_message": good}, led)
+        lr_ = ledrows("bc2")[0]
+        check("stop: a lost row that gets its real SubagentStop reply is re-graded from it, not dropped", lr_.get("how") == "hint" and lr_.get("status") == "done" and lr_.get("confidence") == "high")
+
+        # 16. a run_in_background call whose result already came back complete, with its report, is a sync reply
+        run("start", {"session_id": "bc4", "cwd": cwd, "transcript_path": str(tr)}, led)
+        tin_ = dict(agent("haiku", "low")["tool_input"], run_in_background=True)
+        run("post", dict(agent("haiku", "low", resp={"status": "completed", "agentId": "rc1", "content": [blk(good)]}, cwd=cwd), session_id="bc4", tool_input=tin_), led)
+        rr_ = next(r for r in ledrows("bc4") if r.get("agent_id") == "rc1")
+        check("post: run_in_background=True with a completed result that has a header is a sync reply, not pending", rr_.get("status") == "done" and rr_.get("confidence") == "high")
+        run("post", dict(agent("haiku", "low", resp={"status": "completed", "agentId": "rc2", "content": [blk("Understood.")]}, cwd=cwd), session_id="bc4", tool_input=tin_), led)
+        check("post: ... but a completed stub with no header stays pending", next(r for r in ledrows("bc4") if r.get("agent_id") == "rc2").get("status") == "pending")
+
+        # ── Batch B ──
+        RC = lambda n=1: f"🧾 **{n} Spawn{'' if n == 1 else 's'} · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y"
+        stop_ = lambda sid_, text, active=False: run("receipt", {"session_id": sid_, "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": active, "last_assistant_message": text}, led)
+        def b_task(sid_):
+            run("start", {"session_id": sid_, "cwd": cwd, "transcript_path": str(tr)}, led)
+            run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id=sid_, transcript_path=str(tr)), led)
+        # 1. only a printed receipt closes the task
+        b_task("bb3")
+        setst("bb3", gate="task", task_budget=6)
+        check("close_task: the first Stop with no receipt nudges", (stop_("bb3", "all done") or {}).get("decision") == "block")
+        check("close_task: the spent nudge (stop_hook_active) ends the Stop without a block ...", stop_("bb3", "still no receipt", True) is None)
+        s_ = gstate("bb3")
+        check("close_task: ... but the task stays open: count, budget and gate answer kept, receipt_owed set", s_.get("spawns_since_receipt") == 1 and s_.get("gate") == "task" and s_.get("task_budget") == 6 and s_.get("receipt_owed") is True)
+        check("close_task: the next Stop nudges again while the receipt is owed", (stop_("bb3", "next turn") or {}).get("decision") == "block")
+        check("close_task: a task with receipt_owed shows a 🟡 `receipt` item in the guide", any(i["id"] == "receipt" and i["p"] == "🟡" for i in gitems("bb3")))
+        check("close_task: a printed receipt closes it and clears receipt_owed", stop_("bb3", RC()) is None and gstate("bb3").get("spawns_since_receipt") == 0 and "receipt_owed" not in gstate("bb3") and gstate("bb3").get("gate") is None)
+        Path(state, "no-user-claude.md").write_text("## abofles overrides\n- Receipt = off\n")
+        b_task("bb4")
+        check("skip mode: Stop does not block and does not close the task — it is marked to close on the next prompt", stop_("bb4", "done.") is None and gstate("bb4").get("spawns_since_receipt") == 1 and gstate("bb4").get("close_on_prompt") is True)
+        run("prompt", {"session_id": "bb4", "cwd": cwd, "prompt": "<task-notification>agent finished</task-notification>"}, led)
+        check("skip mode: a task-notification turn does not close it", gstate("bb4").get("spawns_since_receipt") == 1 and gstate("bb4").get("close_on_prompt") is True)
+        run("prompt", {"session_id": "bb4", "cwd": cwd, "prompt": "now do the next thing"}, led)
+        check("skip mode: the next real prompt closes it and clears the flags", gstate("bb4").get("spawns_since_receipt") == 0 and "close_on_prompt" not in gstate("bb4") and gstate("bb4").get("last_prompt_ts"))
+        Path(state, "no-user-claude.md").unlink()
+        # 2. a turn that ends with a question waits on the user
+        b_task("bb5")
+        check("question: a final line ending with ? gets no receipt nudge, the task stays open", stop_("bb5", "I found two ways.\nWhich one do you want?\n\n") is None and gstate("bb5").get("spawns_since_receipt") == 1)
+        check("question: a ? in the middle of the text still gets the nudge", (stop_("bb5", "Why? Because it works.\nDone.") or {}).get("decision") == "block")
+        b_task("bb5b")
+        check("question: the first reply ending in ? is not nudged but marks the receipt owed (the 🟡 item shows)", stop_("bb5b", "Which one?") is None and gstate("bb5b").get("receipt_owed") is True and any(i["id"] == "receipt" for i in gitems("bb5b")))
+        out = stop_("bb5b", "Still unsure — which one?")
+        check("question: the next turn's Stop nudges even when it ends in ? again (not skipped forever) and names the owed receipt", (out or {}).get("decision") == "block" and "still owed" in out.get("reason", ""))
+        check("question: the nudge is once per turn — stop_hook_active ends the Stop, the receipt stays owed", stop_("bb5b", "Which one?", True) is None and gstate("bb5b").get("receipt_owed") is True)
+        check("question: a printed receipt clears it", stop_("bb5b", RC()) is None and "receipt_owed" not in gstate("bb5b") and not any(i["id"] == "receipt" for i in gitems("bb5b")))
+        # connector_free resets with a new ask when no task is open
+        run("start", {"session_id": "bb9", "cwd": cwd, "transcript_path": str(tr)}, led)
+        setst("bb9", connector_free=2)
+        run("prompt", {"session_id": "bb9", "cwd": cwd, "prompt": "<task-notification>x</task-notification>"}, led)
+        check("connector_free: a notification prompt does not reset it", gstate("bb9").get("connector_free") == 2)
+        run("prompt", {"session_id": "bb9", "cwd": cwd, "prompt": "next ticket please"}, led)
+        check("connector_free: a real prompt with no open task (spawns_since_receipt 0) resets it", gstate("bb9").get("connector_free") == 0)
+        b_task("bb8")
+        setst("bb8", connector_free=2)
+        run("prompt", {"session_id": "bb8", "cwd": cwd, "prompt": "and one more thing"}, led)
+        check("connector_free: ... but not while the task is open (spawns pending a receipt)", gstate("bb8").get("connector_free") == 2)
+        # 3. compact and resume keep the task; startup and clear reset it
+        b_task("bb6")
+        run("start", {"session_id": "bb6", "cwd": cwd, "transcript_path": str(tr), "source": "compact"}, led)
+        check("start: a compact keeps the task", gstate("bb6").get("spawns_since_receipt") == 1)
+        run("start", {"session_id": "bb6", "cwd": cwd, "transcript_path": str(tr), "source": "resume"}, led)
+        check("start: a resume keeps the task", gstate("bb6").get("spawns_since_receipt") == 1)
+        run("start", {"session_id": "bb6", "cwd": cwd, "transcript_path": str(tr), "source": "clear"}, led)
+        check("start: a clear resets the task", gstate("bb6").get("spawns_since_receipt") == 0)
+        b_task("bb6")
+        run("start", {"session_id": "bb6", "cwd": cwd, "transcript_path": str(tr), "source": "startup"}, led)
+        check("start: a startup resets the task", gstate("bb6").get("spawns_since_receipt") == 0)
+        # 4. has_receipt wants the computed header
+        check("has_receipt: the computed header counts (also with a gate suffix and leading spaces)", H.has_receipt(RC()) and H.has_receipt("text\n  " + RC(2)) and H.has_receipt("🧾 **0 Spawns + 1 gate · 1 u** vs Opus 5.5"))
+        check("has_receipt: a quoted 🧾, the words `── receipt` and a bare 🧾 line are not a receipt",
+              not H.has_receipt("the 🧾 emoji marks it") and not H.has_receipt("── receipt ──\ndone x") and not H.has_receipt("> 🧾 **1 Spawn · 1 u**") and not H.has_receipt("🧾 receipt below") and not H.has_receipt(""))
+        b_task("bb7")
+        check("receipt: a quoted receipt phrase in the final text still gets the nudge", (stop_("bb7", "I will print the 🧾 receipt later, ── receipt ── soon") or {}).get("decision") == "block")
+        # 5. the session a script acts on
+        import tempfile as _tf
+        sess_saved = H.STATE_DIR
+        U1, U2 = "11111111-2222-3333-4444-555555555555", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        pj, po = str(Path(cwd, "projX")), str(Path(cwd, "projY"))
+        os.makedirs(pj, exist_ok=True); os.makedirs(po, exist_ok=True)
+        def put(d, sid_, root_, lp=None, age=0):
+            fp = Path(d, f"{sid_}.json"); fp.write_text(json.dumps(dict({"root": root_}, **({"last_prompt_ts": lp} if lp else {}))))
+            os.utime(fp, (time.time() - age, time.time() - age))
+        try:
+            with _tf.TemporaryDirectory() as sd:
+                H.STATE_DIR = Path(sd)
+                put(sd, "sA", pj, lp=100, age=500); put(sd, "sB", pj, lp=900, age=900); put(sd, "sC", pj, age=0); put(sd, "sO", po, lp=5000, age=0); put(sd, U1, pj, lp=50, age=700)
+                pin()
+                check("session: last_prompt_ts beats a newer mtime (sB prompted last though sC wrote last)", H.newest_session_id(pj) == "sB")
+                check("session: another project's newer state is never chosen", H.newest_session_id(pj) != "sO" and H.newest_session_id(po) == "sO")
+                os.environ["ABOFLES_SESSION"] = "sA"
+                check("session: ABOFLES_SESSION wins over everything", H.newest_session_id(pj, U1) == "sA" and H.newest_state_path(pj).name == "sA.json")
+                pin()
+                check("session: an explicit UUID of an existing state is used", H.newest_session_id(pj, U1) == U1 and H.newest_state(pj, U1).get("last_prompt_ts") == 50)
+                check("session: an unexpanded ${CLAUDE_SESSION_ID}, an empty value, a non-UUID and an unknown UUID are ignored",
+                      all(H.newest_session_id(pj, v) == "sB" for v in ("${CLAUDE_SESSION_ID}", "", None, "sA", U2)))
+                check("session: an unexpanded ABOFLES_SESSION is ignored", (os.environ.update(ABOFLES_SESSION="${X}") or True) and H.newest_session_id(pj) == "sB" and (pin() or True))
+            with _tf.TemporaryDirectory() as sd:
+                H.STATE_DIR = Path(sd)
+                put(sd, "mOld", pj, age=900); put(sd, "mNew", pj, age=10); put(sd, "mOther", po, age=0)
+                check("session: with no last_prompt_ts the newest mtime of the project wins", H.newest_session_id(pj) == "mNew")
+                check("session: a folder with no state of its own gets nothing, not another project's", H.newest_state_path(str(Path(cwd, "projZ"))) is None and H.newest_state(str(Path(cwd, "projZ"))) == {})
+                put(sd, "mSub", pj, lp=70, age=0)
+                sub_ = Path(pj, "deep"); sub_.mkdir(exist_ok=True)
+                check("session: a command run in a subfolder of the project belongs to the project's session", H.newest_session_id(str(sub_)) == "mSub")
+        finally:
+            H.STATE_DIR = sess_saved
+            pin()
+        av = ["set", "4", "--session", U1]
+        check("session_arg: pops --session <id> and returns it", H.session_arg(av) == U1 and av == ["set", "4"])
+        av = ["--all", "--session", "${CLAUDE_SESSION_ID}"]
+        check("session_arg: an unexpanded value is dropped and ignored", H.session_arg(av) is None and av == ["--all"])
+        av = ["resolve", "1", "--session", "mine", "--session", U1]
+        check("session_arg: keep=True leaves usable pairs, the first usable id wins", H.session_arg(av, keep=True) == "mine" and av == ["resolve", "1", "--session", "mine", "--session", U1])
+        av = ["resolve", "1", "--session"]
+        check("session_arg: a missing value stays for the script's own usage check", H.session_arg(av) is None and av == ["resolve", "1", "--session"])
+        # the script, end to end: --session <uuid> acts on that state, not on a newer one of the same folder
+        run("start", {"session_id": U2, "cwd": cwd, "transcript_path": str(tr)}, led)
+        run("start", {"session_id": "sessNew", "cwd": cwd, "transcript_path": str(tr)}, led)
+        run("prompt", {"session_id": "sessNew", "cwd": cwd, "prompt": "hi"}, led)
+        pre_ = gstate("sessA").get("task_budget")
+        check("cli: agents.py set N --session <uuid> writes that session only", "agents: 3 this task" in ag("set", "3", "--session", U2) and gstate(U2).get("task_budget") == 3 and gstate("sessNew").get("task_budget") is None and gstate("sessA").get("task_budget") == pre_)
+        check("cli: agents.py ignores an unexpanded session id and acts on the folder's newest prompt", "agents: 6 this task" in ag("set", "6", "--session", "${CLAUDE_SESSION_ID}") and gstate("sessNew").get("task_budget") == 6)
+        # 6. stale install
+        import tempfile as _tf2
+        home_saved = os.environ.get("HOME")
+        try:
+            with _tf2.TemporaryDirectory() as hh:
+                os.environ["HOME"] = hh
+                cache = Path(hh, ".claude", "plugins", "cache", "mp", "abofles")
+                old_root, new_root = cache / "1.0.0", cache / "1.3.0"
+                for r_, v_ in ((old_root, "1.0.0"), (new_root, "1.3.0")):
+                    (r_ / ".claude-plugin").mkdir(parents=True); (r_ / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "abofles", "version": v_}))
+                reg = Path(hh, ".claude", "plugins", "installed_plugins.json")
+                entry = [{"scope": "user", "installPath": str(new_root), "version": "1.3.0"}]
+                reg.write_text(json.dumps({"version": 2, "plugins": {"abofles@mp": entry, "other@mp": [{"installPath": str(old_root), "version": "9"}]}}))
+                note_ = H.stale_install_note(old_root)
+                check("stale install: a session from an old cache folder gets the one-line warning", note_ == "abofles: this session runs 1.0.0 from an old cache folder; 1.3.0 is installed — restart Claude Code to load it.")
+                reg.write_text(json.dumps({"abofles@mp": entry}))
+                check("stale install: the registry without a top-level plugins key works too", "1.3.0 is installed" in (H.stale_install_note(old_root) or ""))
+                check("stale install: the running copy is the installed one -> silent", H.stale_install_note(new_root) is None)
+                reg.write_text(json.dumps({"plugins": {"abofles@mp": entry + [{"installPath": str(old_root), "version": "1.0.0"}]}}))
+                check("stale install: it matches any abofles@* install path -> silent", H.stale_install_note(old_root) is None)
+                check("stale install: the dev repo (outside the cache) is silent", H.stale_install_note() is None and H.stale_install_note(Path(cwd)) is None)
+                reg.write_text("{ not json")
+                check("stale install: bad JSON is silent", H.stale_install_note(old_root) is None)
+                reg.unlink()
+                check("stale install: no registry file is silent", H.stale_install_note(old_root) is None)
+                reg.write_text(json.dumps({"plugins": {"other@mp": entry}}))
+                check("stale install: abofles not in the registry is silent", H.stale_install_note(old_root) is None)
+            note_f = H.stale_install_note
+            H.stale_install_note = lambda root=None: "abofles: stale"
+            st_i = {}
+            check("stale install: emitted once per session (install_checked)", H.install_note_once(st_i) == "abofles: stale" and st_i.get("install_checked") is True and H.install_note_once(st_i) is None)
+            H.stale_install_note = note_f
+        finally:
+            if home_saved is None: os.environ.pop("HOME", None)
+            else: os.environ["HOME"] = home_saved
+
 
     # scripts: status.py / memo.py exit codes
     with tempfile.TemporaryDirectory() as xh, tempfile.TemporaryDirectory() as xp:
@@ -997,7 +1333,7 @@ def main():
         check("exit: status --resolve with an empty id exits 2", st_("--resolve", "", "--session", "xs").returncode == 2)
         check("exit: status --resolve with a flag as id exits 2", st_("--resolve", "--trace").returncode == 2)
         check("exit: status --session without a value exits 2", st_("--resolve", "abc", "--session").returncode == 2)
-        check("exit: status --unresolve with an empty session exits 2", st_("--unresolve", "abc", "--session", "").returncode == 2)
+        check("exit: status --unresolve with an empty session exits 2", st_("--unresolve", "abc", "--session", "", "--trace").returncode == 2)
         check("exit: status --session ../ is cleaned to a name in the ledger dir (no such ledger, exit 1)", st_("--resolve", "abc", "--session", "../../nope").returncode == 1 and not Path(xh, "nope.jsonl").exists())
         r1 = st_("--resolve", "abc1", "--session", "xs", "--trace", "by test")
         txt = lf.read_text().splitlines()
@@ -1022,6 +1358,42 @@ def main():
         check("exit: memo resolve of a resolved item exits 3, writes no trace", m2.returncode == 3 and mem.read_text().count("by hand:") == n_)
         check("exit: memo resolve of a missing item exits 1", me_("resolve", "9").returncode == 1 and me_("reopen", "9").returncode == 1)
         check("exit: memo reopen exits 0 with the given session", me_("reopen", "1", "--trace", "--session", "other").returncode == 0 and "· s:other · reopened by hand" in mem.read_text())
+
+    # scripts: project-scoped ledger, the user's --session wins, a trailing empty --session is ignored
+    sdir = Path(__file__).resolve().parent
+    sid_ = "11111111-2222-3333-4444-555555555555"
+    with tempfile.TemporaryDirectory() as xh, tempfile.TemporaryDirectory() as xp, tempfile.TemporaryDirectory() as xo:
+        xenv = dict(os.environ, HOME=xh, ABOFLES_LEDGER_DIR=str(Path(xh, "led")), ABOFLES_STATE_DIR=str(Path(xh, "st")))
+        xenv.pop("ABOFLES_SESSION", None)
+        Path(xh, "led").mkdir(); Path(xh, "st").mkdir()
+        sc_ = lambda name, *a: subprocess.run([sys.executable, str(sdir / name), *a], cwd=xp, capture_output=True, text=True, env=xenv)
+        # another project's newest ledger must never be shown or billed
+        Path(xh, "st", "otherS.json").write_text(json.dumps({"root": os.path.realpath(xo), "last_prompt_ts": 9}))
+        Path(xh, "led", "otherS.jsonl").write_text('{"agent_id": "zzz999", "topic": "OtherProjectTopic", "status": "partial", "model": "opus", "effort": "high"}\n')
+        for name in ("status.py", "bill.py"):
+            r = sc_(name, "--baseline", "opus")
+            check(f"scope: {name} shows nothing of another project's ledger", r.returncode == 0 and "OtherProjectTopic" not in r.stdout and "zzz999" not in r.stdout and "no ledger for this session yet" in r.stdout)
+            r = sc_(name, "--baseline", "opus", "--session", sid_)
+            check(f"scope: {name} with an unknown --session shows nothing of another project's ledger", r.returncode == 0 and "OtherProjectTopic" not in r.stdout)
+        check("scope: status --resolve cannot reach another project's row", sc_("status.py", "--resolve", "zzz9", "--session", sid_).returncode == 1 and "resolved" not in Path(xh, "led", "otherS.jsonl").read_text())
+        # this project's session: display and --resolve use the same ledger, with the appended session id
+        Path(xh, "st", f"{sid_}.json").write_text(json.dumps({"root": os.path.realpath(xp), "last_prompt_ts": 1}))
+        Path(xh, "led", f"{sid_}.jsonl").write_text('{"agent_id": "abc123", "topic": "MineTopic", "status": "partial", "model": "opus", "effort": "high"}\n')
+        r = sc_("status.py", "--baseline", "opus", "--session", sid_)
+        check("scope: status shows this project's own ledger row", "MineTopic" in r.stdout and "abc123" in r.stdout and "OtherProjectTopic" not in r.stdout)
+        r = sc_("status.py", "--resolve", "abc1", "--session", sid_)
+        check("scope: status --resolve <id> --session <uuid> settles the row the display shows", r.returncode == 0 and json.loads(Path(xh, "led", f"{sid_}.jsonl").read_text())["resolved"] is True)
+        # memo.py: the user's own --session wins over the command's appended one
+        subprocess.run([sys.executable, "-c", "import sys,os; sys.path.insert(0, sys.argv[1]); import abofles_hook as h; h.memo_needs(os.getcwd(), 'sessAAAA', 'owner decision: pick A or B')", str(sdir.parent / "hooks")], cwd=xp, env=xenv)
+        r = sc_("memo.py", "resolve", "1", "--trace", "--session", "mysessX", "--session", sid_)
+        mem = Path(xp, ".claude", "abofles-memo.md").read_text()
+        check("session: memo resolve with the user's --session X plus an appended UUID stamps X", r.returncode == 0 and "· s:mysessX · resolved by hand" in mem and f"s:{sid_}" not in mem)
+        # an empty trailing --session "" (unexpanded command variable) is ignored
+        for name, args in (("agents.py", ()), ("status.py", ("--baseline", "opus")), ("bill.py", ("--baseline", "opus")), ("guide.py", ()), ("memo.py", ("show",))):
+            r = sc_(name, *args, "--session", "")
+            check(f"session: {name} ignores a trailing empty --session", r.returncode == 0 and "usage" not in r.stdout.lower())
+        check("session: status --resolve with an empty id plus a trailing empty --session still exits 2", sc_("status.py", "--resolve", "", "--session", "").returncode == 2)
+        check("session: a non-trailing empty --session value still exits 2", sc_("status.py", "--resolve", "abc", "--session", "", "--trace").returncode == 2)
 
     print(f"\n{'ALL PASS' if not fails else f'{fails} FAILED'}")
     sys.exit(1 if fails else 0)

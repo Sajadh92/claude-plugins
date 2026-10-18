@@ -13,11 +13,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import guide_items, refresh_guide, load_state, save_state, state_lock, newest_state_path, guide_on  # noqa: E402
+from abofles_hook import guide_items, refresh_guide, load_state, save_state, state_lock, newest_state_path, guide_on, session_arg  # noqa: E402
 
 
 def main():
-    sp = newest_state_path()
+    if sys.argv[-2:] == ["--session", ""]:  # a command whose ${CLAUDE_SESSION_ID} expanded to nothing
+        del sys.argv[-2:]
+    sess = session_arg(sys.argv)
+    sp = newest_state_path(os.getcwd(), sess)
     if not sp:
         print("abofles: no session state yet")
         return

@@ -105,6 +105,7 @@ After a verifier FAIL, re-verify only the failed criterion: [references/spawn-de
 - Self-contained (goal, exact files, constraints, "done"): the subagent has none of your context.
 - First line: `abofles: <Topic> / <Side> · T<tier>` (side as a full word: `Read`, `Analyse`, `Plan`, `Work`, `Verify`, `Judge`, `Explain`). Last line: `Line cap: N`.
 - Read: a precise question; working tree only, never `.worktrees/`, `.claude/worktrees/`, `node_modules/`, `bin/`, `obj/`, `vendor/` unless named. Plan: files in scope, not to touch, out of scope. Work: plan or findings as a short list. Verify: criteria and the command.
+- Judge/Verifier needing a ticket (no Jira access): fetch it yourself (first two fetch-by-key reads per task are free) or via the Read agent, then paste summary, acceptance criteria and status.
 
 ## Step 6 — Progress line, receipt, gates, memo
 

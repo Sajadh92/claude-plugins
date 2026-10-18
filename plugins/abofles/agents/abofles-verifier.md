@@ -36,6 +36,7 @@ NOTE is the last line of the reply. Nothing after it.
 - Stay under the line cap from the prompt (EVIDENCE and ISSUES lines; the rest does not count). If over: keep every EVIDENCE line, keep the top ISSUES in full, end ISSUES with `+N more: <severity path:line — 5 words>`.
 - Never cut an EVIDENCE line to fit. Criteria are the contract.
 - Never edit files. If a fix is obvious, write it in the ISSUES line as the fix.
+- Connector data (a Jira ticket, a Confluence page) comes in the prompt: you cannot reach Jira or Confluence. When a criterion needs it and it was not given, write `ticket text not given` in NOTE and mark that criterion `partial`; never guess it.
 - `CONFIDENCE: low` when you could not run the decisive check. Say which one in NOTE.
 - `STATUS: done` only when every criterion has an EVIDENCE line with proof. A criterion you could not check is `partial` and `CONFIDENCE: low`, named in NOTE.
 - Copy every path exactly from the tool output. Never retype a path.

@@ -7,7 +7,8 @@
     agents.py set off         no budget, no questions this session
     agents.py set ask         ask the gate question again at the next spawn
 
-Acts on the session that ran a hook most recently (the one you type in).
+Acts on the session you type in: ABOFLES_SESSION, else `--session <id>` (the command passes its own session id), else the
+newest prompt among this folder's sessions. Never a session of another project.
 """
 import json
 import os
@@ -15,13 +16,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import apply_gate_answer, gate_setting, task_budget, mode_of, AGENT_BUDGETS, state_lock, load_state, save_state, tier_name, newest_state_path, budget_used, work_spawns  # noqa: E402
+from abofles_hook import apply_gate_answer, gate_setting, task_budget, mode_of, AGENT_BUDGETS, state_lock, load_state, save_state, tier_name, newest_state_path, budget_used, work_spawns, session_arg  # noqa: E402
 
 
 def main():
     args = sys.argv[1:]
+    if args[-2:] == ["--session", ""]:  # a command whose ${CLAUDE_SESSION_ID} expanded to nothing
+        del args[-2:]
+    sess = session_arg(args)
     cwd = os.getcwd()
-    sp = newest_state_path()
+    sp = newest_state_path(cwd, sess)
     sid = sp.stem if sp else ""
     if args[:1] == ["set"] and len(args) > 1:
         if not sp:

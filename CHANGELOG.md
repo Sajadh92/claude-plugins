@@ -2,6 +2,28 @@
 
 All notable changes to the plugins in this marketplace.
 
+## abofles 1.4.0 — 2026-10-19
+
+- abofles: harness notes (`[harness: …]` blocks) are no longer graded as part of an agent's reply, so they no longer trigger length or format warnings.
+- abofles: when the hand-back of a background agent is a stub ("Understood."), the reply is read from the agent's own transcript and graded from there.
+- abofles: the question gate unlocks only on a real `VERDICT:` (judge) or `QUESTION:` (explainer; `EXPLAIN` optional) line; a stub reply leaves it locked and says so.
+- abofles: only `abofles-judge` and `abofles-explainer` (or a spawn whose header side is Judge/Explain) are gate agents; a project agent named like one no longer unlocks questions. A `SendMessage` unlocks only for the ids or names of gate agents spawned this session.
+- abofles: an unlock made before the open task began, or older than the gate wait with no gate agent running, is dropped instead of demanding a question nobody asked.
+- abofles: a pending background row with no agent id or transcript for 30 minutes closes as lost; a pending row from an earlier task is no longer shown as running.
+- abofles: `run_in_background: true` is treated as async even when the tool result looks complete.
+- abofles: a task closes only on a printed receipt. A spent nudge keeps the task open (count, budget and gate answer stay; the next Stop asks again); with receipts off, the task closes at the next real user prompt, not on a task-notification turn.
+- abofles: a turn whose last line ends with `?` gets no receipt nudge — the task waits on the user.
+- abofles: a compact or a resume keeps the open task; only a new session or `/clear` resets it.
+- abofles: a receipt counts only as the computed header line (`🧾 **N Spawns …`); a quoted 🧾 or the words `── receipt` no longer close the task.
+- abofles: `/abofles:agents`, `guide`, `memo`, `bill` and `status` act on the session you type in — `ABOFLES_SESSION`, else the command's own `--session ${CLAUDE_SESSION_ID}`, else the newest prompt among this folder's sessions — never a session of another project (`status.py` and `bill.py` no longer fall back to the newest ledger of any project: with none for this session they say so and show no spend); `--resolve` acts on the same ledger the display shows; an empty `--session ""` from a command is ignored.
+- abofles: the first two fetch-by-key connector reads of a task (`getJiraIssue`, `getConfluence*`, `get*Page`) do not count toward the direct-read warning; searches and lists still count.
+- abofles: Judge and Verifier are told that ticket and page text comes in the prompt (they cannot reach Jira); a missing one is reported as `ticket text not given`, and the skill tells the main session to paste the key fields into their prompt.
+- abofles: a receipt still owed when a turn ends is carried to the next turn's Stop.
+- abofles: the free connector reads (first two fetch-by-key per task) reset at the first real user prompt with no open task.
+- abofles: ledger rows record `how` (where the graded text came from: hint, transcript, stub, no_reply, lost) and `gate` (judge / explain) for the scripts.
+- abofles: a row closed as lost is graded again when the background reply arrives late.
+- abofles: a session that runs an old plugin cache copy while a newer one is installed gets one warning line, once per session, to restart Claude Code.
+
 ## abofles 1.3.0 · abofles-guide 0.3.0 — 2026-10-15
 
 - abofles: after an agent-budget deny, one `AskUserQuestion` (raise the budget?) within 10 min goes to the user with no Judge — the budget question no longer needs a gate spawn; the deny text says so.

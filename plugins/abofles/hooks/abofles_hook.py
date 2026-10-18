@@ -26,6 +26,7 @@ tokens) in the project's `## abofles overrides` block, else the defaults above.
 Reads the hook JSON on stdin. Never raises: a broken hook must not block work.
 """
 import fcntl
+import itertools
 import json
 import os
 import re
@@ -331,10 +332,19 @@ def reset_task(st):
     st["inflight"] = 0
     st["inflight_bg"] = 0
     st["judge_ok"] = 0  # an unlock not used by a question does not carry into the next task
+    st["connector_free"] = 0  # fetch-by-key connector reads that were free in this task
     st.pop("budget_ask_ts", None)
     explain_clear(st)
     if st.get("gate") == "task":  # a per-task answer expires with the task; auto/off stay for the session
         st["gate"], st["task_budget"], st["task_parallel"] = None, None, None
+
+
+def close_task(st, why):
+    """End the task — only a printed receipt (or the next real prompt, when no receipt is wanted) calls this. A spent
+    nudge, a question to the user or a compact leave the task open. `why` (receipt / prompt) is for the reader of the call."""
+    reset_task(st)
+    st.pop("receipt_owed", None)
+    st.pop("close_on_prompt", None)
 
 
 CONTEXT_MARKS = (500, 600, 700, 750, 800, 850, 900)  # thousands of tokens
@@ -433,7 +443,7 @@ def guide_entries(root, st, sid, ctx_state=None):
                                     f"abofles: open ATTENTION on {topic} (agent {aid or '?'}) — show it to the user before closing the task and say how it is handled. "
                                     "If it is already handled, say so and resolve it.", None, recheck("ATTENTION", "confirm it is handled"), id=f"fail:{aid or topic}"))
     # 2. a judged question nobody asked
-    if st.get("judge_ok", 0) > 0 and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT:
+    if unlock_live(st, rows, time.time()) and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT:
         items.append(guide_item("🟠", "a judged question is unasked — AskUserQuestion now (QUESTION + WHY in the box, options as cards)",
                                 "abofles: the judged question is still unasked — ask it now with AskUserQuestion.", id="ask"))
     # 3. owner decisions open in the memo
@@ -452,9 +462,9 @@ def guide_entries(root, st, sid, ctx_state=None):
                                 None, script_cmd("memo.py", "reopen", num, "--trace", "--session", sid) if num else None, id=f"dec:{num or '?'}"))
     # 4. a reply of this task that needs Step 4 and got nothing
     for r in rows:
-        if r.get("ts", 0) <= started or r.get("resolved") or side_of(r.get("agent") or "")[0] in ("judge", "explainer"):
+        if r.get("ts", 0) <= started or r.get("resolved") or row_gate(r):
             continue
-        if r.get("owner_input") or r.get("status") == "pending":
+        if r.get("owner_input") or r.get("status") == "pending" or r.get("how") in ("no_reply", "lost"):  # no reply text / lost: nothing to escalate
             continue
         if r.get("status") in ("partial", "blocked") or r.get("confidence") == "low":
             nm, ne = next_setting(r.get("model"), r.get("effort"), r.get("side"), r.get("tier") or st.get("task_tier_max") or None)
@@ -470,8 +480,11 @@ def guide_entries(root, st, sid, ctx_state=None):
                                     None, script_cmd("status.py", "--unresolve", r["agent_id"], "--session", sid, "--trace", note) if r.get("agent_id") else None,
                                     id=f"esc:{r.get('agent_id') or who}"))
             break
+    # 4b. the one nudge is spent (or the last turn ended on a question) and the receipt of this task is still not printed
+    if st.get("receipt_owed"):
+        items.append(guide_item("🟡", "receipt owed for this task — print it", "abofles: the receipt of this task is still owed — print it now.", id="receipt"))
     # 5. background agents still running
-    pend = [r for r in rows if r.get("status") == "pending"]
+    pend = [r for r in rows if r.get("status") == "pending" and r.get("ts", 0) >= started]  # a row of an earlier task is not "running" for this one
     running = len(pend)
     if running:
         items.append(guide_item("⏳", f"{running} background agent{'s' if running > 1 else ''} running — collect them (and their receipt) before the next ticket",
@@ -1308,6 +1321,46 @@ REASK_WINDOW = 900  # seconds after an allowed question in which the same round 
 GUIDE_WINDOW = 4 * 3600  # seconds back the guide looks for open FAIL/escalation rows when no task start is known
 BUDGET_ASK_WINDOW = 600  # seconds after an agent-budget deny in which one AskUserQuestion (raise the budget?) needs no Judge
 GATE_WAIT = 900  # seconds after a SendMessage to a gate agent during which the Stop hook does not demand the question (its reply is still coming)
+GATE_TYPES = {"abofles:abofles-judge": "judge", "abofles-judge": "judge", "abofles:abofles-explainer": "explain", "abofles-explainer": "explain"}
+
+
+def is_gate_agent(stype, prompt=""):
+    """"judge" / "explain" for a question-gate agent, else None: the exact abofles Judge/Explainer types, or any other
+    agent type whose prompt header says `/ Judge` or `/ Explain`. A project agent merely named `decision-judge` is not one."""
+    k = GATE_TYPES.get((stype or "").strip())
+    if k:
+        return k
+    return {"Judge": "judge", "Explain": "explain"}.get(parse_header(prompt or "")[1] or "")
+
+
+def row_gate(r):
+    """is_gate_agent for a ledger row (post() stores `gate` on it; older rows fall back to the agent type)."""
+    return r.get("gate") or is_gate_agent(r.get("agent") or "", "")
+
+
+def row_kind(r):
+    """The side of a ledger row as post() graded it: a gate agent's judge/explainer, else the side word stored on the row, else the type's."""
+    g = {"judge": "judge", "explain": "explainer"}.get(row_gate(r))
+    if g:
+        return g
+    k = next((k for k, w in SIDE_WORD.items() if w == r.get("side")), "")
+    return "" if k in ("judge", "explainer") else k or side_of(r.get("agent") or "")[0]
+
+
+def unlock_live(st, rows, now=None):
+    """True when the session's unlock (judge_ok) still stands: it was made in the open task and either a gate agent
+    is still running (its reply is coming), or it came from a reply already in hand (post/close_row), or it is a SendMessage
+    unlock younger than GATE_WAIT (only that one waits for a reply that may never come)."""
+    if st.get("judge_ok", 0) <= 0:
+        return False
+    ts = st.get("judge_ok_ts", 0) or 0
+    if ts < st.get("task_started", 0):
+        return False
+    if any(r.get("status") == "pending" and row_gate(r) for r in rows):
+        return True
+    if ts > (st.get("gate_wait_ts", 0) or 0):
+        return True  # a post()/close_row() unlock (a reply the model has in hand): it stays until asked or until the task ends
+    return (now if now is not None else time.time()) - ts < GATE_WAIT  # a SendMessage unlock whose reply never came expires
 
 
 def qgate(data):
@@ -1332,7 +1385,7 @@ def qgate(data):
             st["asked"] = (asked + [question_line(q) for q in qlist])[-12:]
             save_state(sid, st)
             return
-        ok = st.get("judge_ok", 0)
+        ok = st.get("judge_ok", 0) if unlock_live(st, ledger_rows(sid)) else 0  # a stale unlock (earlier task, unanswered SendMessage) lets nothing through
         reask = bool(qlist) and all(any(similar(q, a) for a in asked) for q in qlist)  # the same round again, reworded: already judged
         reask = reask or (time.time() - st.get("last_ask_ts", 0)) < REASK_WINDOW  # or asked again right after (a translation shares no words)
         tp = data.get("transcript_path") or st.get("transcript_path") or ""
@@ -1384,19 +1437,16 @@ def sendmsg(data):
     if not to:
         return
     sid = data.get("session_id", "")
-    try:
-        rows = [json.loads(l) for l in ledger_path(sid).read_text().splitlines() if l.strip()]
-    except Exception:
-        rows = []
-    gate_ids = {r.get("agent_id") for r in rows if side_of(r.get("agent") or "")[0] in ("judge", "explainer")}
-    if to not in gate_ids and not re.search(r"judge|explain", to, re.I):
-        return
+    rows = ledger_rows(sid)
+    gate_ids = {r.get("agent_id") for r in rows if r.get("agent_id") and row_gate(r)}  # rows from before post() recorded gate_agents
     with state_lock(sid):
         st = load_state(sid)
         if "started" not in st:
             return
+        if to not in gate_ids and to not in (st.get("gate_agents") or []):
+            return  # not a gate agent this session spawned: a name that merely contains "judge" unlocks nothing
         st["judge_ok"] = st.get("judge_ok", 0) + 1
-        st["gate_wait_ts"] = int(time.time())
+        st["judge_ok_ts"] = st["gate_wait_ts"] = int(time.time())
         prev = st.get("explain_prev") or {}
         if prev.get("text") and (time.time() - prev.get("ts", 0)) < REASK_WINDOW:  # the same round again: its table must be printed again, after this message
             explain_arm(st, True, prev["text"], transcript_size(data.get("transcript_path") or st.get("transcript_path") or ""))
@@ -1450,6 +1500,53 @@ def judge_blocks(text):
             q = qm[-1].strip() if qm else ""
         out.append((v, q, a, e))
     return out
+
+
+def apply_gate_reply(st, text, kind, sid="", root="", tier=None, tpath=""):
+    """What a Judge ("judge") / Explainer ("explainer") reply does to the question gate — one rule for a sync reply (post)
+    and a background one (close_row). Every judge block counts: ANSWERED blocks go to the memo, a HANDOFF or an ASK among
+    them decides the verdict. ASK (or any other verdict) and a filled EXPLAIN unlock one question; ANSWERED, HANDOFF, a judge
+    reply with no VERDICT and an explainer reply with no QUESTION line (a stub) do not; an explainer's EXPLAIN is optional. Mutates st (the caller holds the state lock and
+    saves). Returns (verdict, warnings, instruction): the instruction (how to ask) is for the live model only."""
+    warnings, instruction = [], ""
+    blocks = judge_blocks(text) if kind == "judge" else [judge_fields(text)]
+    verdicts = [b[0] for b in blocks]
+    verdict = "HANDOFF" if "HANDOFF" in verdicts else "ASK" if "ASK" in verdicts else (verdicts[0] if verdicts else "")
+    if kind == "judge":
+        for v, q1, a1, e1 in blocks:
+            if v == "ANSWERED" and q1:
+                memo_decision(root, sid, f"judge: {q1}", f"{a1}" + (f" ({e1})" if e1 else ""))
+                if (tier or 3) >= 3:  # a silent wrong answer on a sensitive decision must still reach the user's list
+                    memo_needs(root, sid, f"judge decided ({tier_name(tier or 3)}): {q1} → {a1} — check")
+        answered = [b for b in blocks if b[0] == "ANSWERED"]
+        if answered and verdict != "ANSWERED":
+            warnings.append("judge ANSWERED " + "; ".join(f"{b[1]} → {b[2]}" for b in answered) + " — state those in one line each, do not ask them; the remaining question(s) below")
+    if kind == "judge" and verdict == "ANSWERED":
+        warnings.append("judge ANSWERED from evidence — state it in one line and continue, do not ask the user: " + "; ".join(f"{b[1]} → {b[2]}" + (f" ({b[3]})" if b[3] else "") for b in blocks))
+    elif kind == "judge" and verdict == "HANDOFF":
+        if (tier or 3) <= 2:
+            warnings.append("judge returned HANDOFF on a Minor/Normal question — it must explain itself; re-spawn it with the tier stated, or spawn the explainer")
+        else:
+            warnings.append(f"judge HANDOFF — spawn `abofles:abofles-explainer` ({label(*QUESTION_ROUTE[tier or 3][2:])}) with its QUESTION, EVIDENCE and WHY, then ask")
+    elif kind == "judge" and not verdict:
+        warnings.append("judge reply has no VERDICT line (a stub, not the report) — the question gate stays locked; read the judge's real reply or re-spawn it")
+    elif kind == "explainer" and not judge_fields(text)[1]:
+        warnings.append("explainer reply has no QUESTION line (a stub, not the report) — the question gate stays locked; read the explainer's real reply or re-spawn it")
+    else:
+        st["judge_ok"] = st.get("judge_ok", 0) + 1
+        st["judge_ok_ts"] = int(time.time())
+        md = explain_needs_markdown(text)
+        ex = explain_cut(explain_block(text)) if md else ""
+        instruction = ask_md_text(ex) if md else ASK_PLAIN
+        explain_arm(st, md, ex, transcript_size(tpath))  # what the model prints after this point counts
+    return verdict, warnings, instruction
+
+
+def ledger_rows(session_id):
+    try:
+        return [json.loads(l) for l in ledger_path(session_id).read_text().splitlines() if l.strip()]
+    except Exception:
+        return []
 
 
 def pending_count(session_id):
@@ -1519,7 +1616,14 @@ def receipt_printed_after(transcript_path, offset):
 
 
 def has_receipt(text):
-    return bool(re.search(r"^\s*🧾", text, re.M)) or "── receipt" in text
+    """A line that is the receipt header the hook computes (`🧾 **3 Spawns …`); a quoted 🧾 or the words `── receipt` are not one."""
+    return bool(re.search(r"^\s*🧾 \*\*\d+ Spawns?\b", text or "", re.M))
+
+
+def ends_with_question(text):
+    """True when the last non-empty line of the reply ends with `?` — the task waits on the user."""
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    return bool(lines) and lines[-1].endswith("?")
 
 
 def context_block(tokens, mark, marks, in_task):
@@ -1552,7 +1656,7 @@ def context_watch(data, st):
     warned = st.get("context_warned_at", 0)
     # a receipt printed since the last spawn closes the task (best effort — see receipt_printed_after)
     if st.get("spawns_since_receipt") and not background_running(data.get("session_id", "")) and receipt_printed_after(path, st.get("last_spawn_offset", 0)):
-        reset_task(st)
+        close_task(st, "receipt")
     in_task = st.get("spawns_since_receipt", 0)
     if not crossed:
         if warned:
@@ -1770,7 +1874,7 @@ def pre(data):
         return
     sid = data.get("session_id", "")
     _, _, tier = parse_header(ti.get("prompt") or "")
-    is_q = side_of(stype)[0] in ("judge", "explainer")
+    is_q = bool(is_gate_agent(stype, ti.get("prompt") or ""))
     with state_lock(sid):
         st = load_state(sid)
         cwd = project_root(data, st)
@@ -1782,7 +1886,7 @@ def pre(data):
         close_stale_pending(st, sid, cwd)
         mid = midturn_receipt(data, st)  # a receipt printed between spawns (long autonomous turns) ends that task here, not at Stop
         if mid:
-            reset_task(st)
+            close_task(st, "receipt")
         st["task_tier_max"] = max(st.get("task_tier_max") or 0, tier or 0)
         budget, src = task_budget(cwd, st, tier)
         used = budget_used(st) + st.get("inflight", 0)
@@ -1843,6 +1947,31 @@ def response_text(resp):
     return str(resp)
 
 
+def reply_text(resp):
+    """response_text for an Agent tool_response: a dict with a `content` list drops its first `harnessNoteCount` blocks,
+    its last `harnessTailCount` blocks and any block starting `[harness:` — the harness's own notes are not the agent's reply."""
+    if isinstance(resp, dict) and isinstance(resp.get("content"), list):
+        blocks = list(resp["content"])
+        try:
+            head, tail = int(resp.get("harnessNoteCount") or 0), int(resp.get("harnessTailCount") or 0)
+        except (TypeError, ValueError):
+            head = tail = 0
+        blocks = blocks[max(0, head):]
+        if tail > 0:
+            blocks = blocks[:-tail] if tail < len(blocks) else []
+        blocks = [b for b in blocks if not response_text(b).lstrip().startswith("[harness:")]
+        return response_text(blocks)
+    return response_text(resp)
+
+
+HEADER_RE = re.compile(r"^[ \t]*(STATUS|VERDICT|EXPLAIN):", re.M)
+
+
+def has_header(text):
+    """True when a line of the text starts with STATUS:, VERDICT: or EXPLAIN: — the mark of an agent's real report (a stub like "Understood" has none)."""
+    return bool(HEADER_RE.search(text or ""))
+
+
 def tail_section(text, names):
     """Text from the first of the named sections (GAPS:, LEFT:, ...) to the end."""
     m = re.search(r"^\s*(" + "|".join(names) + r"):", text, re.M)
@@ -1853,9 +1982,18 @@ SIDES = ("reader", "analyst", "planner", "worker", "verifier", "judge", "explain
 LAST_SECTION = {"reader": "GAPS", "analyst": "RECOMMENDATION", "planner": "OPEN", "worker": "LEFT", "verifier": "NOTE", "judge": "EXPLAIN", "explainer": "EXPLAIN"}
 
 
-def side_of(stype):
-    k = next((k for k in SIDES if k in (stype or "")), "")
-    return k, {"reader": "Read", "analyst": "Analyse", "planner": "Plan", "worker": "Work", "verifier": "Verify", "judge": "Judge", "explainer": "Explain"}.get(k, "?")
+SIDE_WORD = {"reader": "Read", "analyst": "Analyse", "planner": "Plan", "worker": "Work", "verifier": "Verify", "judge": "Judge", "explainer": "Explain"}
+
+
+def side_of(stype, prompt=""):
+    """(kind, word) of an agent. An abofles-* type names its side; any other type (project agent, general-purpose) has only the prompt header's side."""
+    s = stype or ""
+    if s.startswith(("abofles:", "abofles-")):
+        k = next((k for k in SIDES if k in s), "")
+    else:
+        word = parse_header(prompt or "")[1]
+        k = next((k for k, w in SIDE_WORD.items() if w == word), "")
+    return k, SIDE_WORD.get(k, "?")
 
 
 def prompt_dirs(prompt):
@@ -1911,11 +2049,13 @@ def resolve_cited(cwd, rel, extra=()):
     return None
 
 
-def analyze(text, stype, cap, cwd, extra=()):
-    """Check one reply. Returns (fields, warnings)."""
-    kind, _ = side_of(stype)
+def analyze(text, stype, cap, cwd, extra=(), kind=None):
+    """Check one reply. Returns (fields, warnings). `kind` = the agent's side as post()/close_row() resolved it (gate agents and
+    header sides included); None = from the type alone."""
+    if kind is None:
+        kind, _ = side_of(stype)
     lines = [l for l in text.splitlines() if l.strip()]
-    has_header = bool(re.search(r"^\s*STATUS:\s*(done|partial|blocked)", text, re.M)) and \
+    header_ok = bool(re.search(r"^\s*STATUS:\s*(done|partial|blocked)", text, re.M)) and \
         bool(re.search(r"^\s*CONFIDENCE:\s*(high|medium|low)", text, re.M))
     status = (re.search(r"^\s*STATUS:\s*(\w+)", text, re.M) or [None, None])[1]
     conf = (re.search(r"^\s*CONFIDENCE:\s*(\w+)", text, re.M) or [None, None])[1]
@@ -2051,7 +2191,7 @@ def analyze(text, stype, cap, cwd, extra=()):
         warnings.append("VERDICT: FAIL — a criterion failed; fix via a W agent at the same or next setting, then re-verify. Do not accept the work")
     elif attention:
         warnings.append("verifier NOTE: ATTENTION — criteria pass but a critical issue outside them exists; show it to the user before closing")
-    if kind and not has_header:
+    if kind and not header_ok:
         warnings.append(f"reply from {stype} has no STATUS/CONFIDENCE header — treat CONFIDENCE as low")
     if cap and len(content_lines) > cap + 2:
         warnings.append(f"reply has {len(content_lines)} content lines, cap was {cap} — over the cap; ask for ranking and `+<n> more:` next time")
@@ -2088,7 +2228,9 @@ def post(data):
     cap = int(cap_m.group(1)) if cap_m else None
     resp = data.get("tool_response")
     agent_id = resp.get("agentId") if isinstance(resp, dict) else None
-    is_async = isinstance(resp, dict) and (resp.get("status") == "async_launched" or resp.get("isAsync") is True)
+    done_sync = isinstance(resp, dict) and resp.get("status") == "completed" and has_header(reply_text(resp))  # a finished result with its report, even from a run_in_background call
+    is_async = (isinstance(resp, dict) and (resp.get("status") == "async_launched" or resp.get("isAsync") is True)) or (ti.get("run_in_background") is True and not done_sync)
+    gate = is_gate_agent(stype, prompt)
 
     entry = {
         "ts": int(time.time()),
@@ -2107,48 +2249,33 @@ def post(data):
     dirs = prompt_dirs(prompt)
     if dirs:
         entry["dirs"] = dirs  # folders the prompt named: cited paths resolve from them too (close_row reads it back)
+    if gate:
+        entry["gate"] = gate  # close_row / the guide / sendmsg read it back: the agent type alone does not say it for a general-purpose agent
     warnings = []
-    kind = side_of(stype)[0]
-    unlock = 0
+    kind = {"judge": "judge", "explain": "explainer"}.get(gate) or side_of(stype, prompt)[0]
+    if kind in ("judge", "explainer") and not gate:
+        kind = ""
+    sid = data.get("session_id", "")
     if is_async:
         entry["status"] = "pending"
         entry["confidence"] = None
     else:
-        text = response_text(resp)
-        fields, warnings = analyze(text, stype, cap, project_root(data, load_state(data.get("session_id", ""))), entry.get("dirs") or ())  # paths resolve from the project root, not a drifted shell cwd
+        st0 = load_state(sid)
+        if data.get("transcript_path") and not st0.get("transcript_path"):
+            st0["transcript_path"] = data["transcript_path"]
+        text, how = get_reply(st0, sid, agent_id, reply_text(resp))  # the Agent result, unless it is a stub and the subagent's transcript holds the real report
+        if how != "hint":
+            entry["how"] = how
+        mroot = project_root(data, st0)
+        fields, warnings = analyze(text, stype, cap, mroot, entry.get("dirs") or (), kind)  # paths resolve from the project root, not a drifted shell cwd
         entry.update(fields)
         if kind in ("judge", "explainer"):
-            blocks = judge_blocks(text) if kind == "judge" else [judge_fields(text)]
-            verdicts = [b[0] for b in blocks]
-            verdict = "HANDOFF" if "HANDOFF" in verdicts else "ASK" if "ASK" in verdicts else (verdicts[0] if verdicts else "")
-            q, a, ev = next(((b[1], b[2], b[3]) for b in blocks if b[0] == verdict), ("", "", ""))
+            with state_lock(sid):
+                stx = load_state(sid)
+                verdict, gw, instruction_ = apply_gate_reply(stx, text, kind, sid, mroot, tier, data.get("transcript_path") or "")  # what the model prints after this point counts
+                save_state(sid, stx)
             entry["verdict"] = verdict or None
-            mroot = project_root(data, load_state(data.get("session_id", "")))
-            if kind == "judge":
-                for v, q1, a1, e1 in blocks:
-                    if v == "ANSWERED" and q1:
-                        memo_decision(mroot, data.get("session_id", ""), f"judge: {q1}", f"{a1}" + (f" ({e1})" if e1 else ""))
-                        if (tier or 3) >= 3:  # a silent wrong answer on a sensitive decision must still reach the user's list
-                            memo_needs(mroot, data.get("session_id", ""), f"judge decided ({tier_name(tier or 3)}): {q1} → {a1} — check")
-                answered = [b for b in blocks if b[0] == "ANSWERED"]
-                if answered and verdict != "ANSWERED":
-                    warnings.append("judge ANSWERED " + "; ".join(f"{b[1]} → {b[2]}" for b in answered) + " — state those in one line each, do not ask them; the remaining question(s) below")
-            if kind == "judge" and verdict == "ANSWERED":
-                warnings.append("judge ANSWERED from evidence — state it in one line and continue, do not ask the user: " + "; ".join(f"{b[1]} → {b[2]}" + (f" ({b[3]})" if b[3] else "") for b in blocks))
-            elif kind == "judge" and verdict == "HANDOFF":
-                if (tier or 3) <= 2:
-                    warnings.append("judge returned HANDOFF on a Minor/Normal question — it must explain itself; re-spawn it with the tier stated, or spawn the explainer")
-                else:
-                    warnings.append(f"judge HANDOFF — spawn `abofles:abofles-explainer` ({label(*QUESTION_ROUTE[tier or 3][2:])}) with its QUESTION, EVIDENCE and WHY, then ask")
-            else:
-                unlock = 1
-                md = explain_needs_markdown(text)
-                ex = explain_cut(explain_block(text)) if md else ""
-                warnings.append(ask_md_text(ex) if md else ASK_PLAIN)
-                with state_lock(data.get("session_id", "")):
-                    stx = load_state(data.get("session_id", ""))
-                    explain_arm(stx, md, ex, transcript_size(data.get("transcript_path") or ""))  # what the model prints after this point counts
-                    save_state(data.get("session_id", ""), stx)
+            warnings = warnings + gw + ([instruction_] if instruction_ else [])
         entry["warnings"] = warnings or None
     # orchestrator guard: a spawn resets the direct-read streak; receipt check: one more spawn this turn
     with state_lock(data.get("session_id", "")):
@@ -2157,14 +2284,16 @@ def post(data):
         st["guard_warned_at"] = 0
         st["spawns"] = st.get("spawns", 0) + 1
         st["spawns_since_receipt"] = st.get("spawns_since_receipt", 0) + 1
+        if gate:
+            ga = st.get("gate_agents") or []
+            known = [agent_id, str(ti.get("name") or "").strip()]  # SendMessage `to` is an agent id or the name given at spawn, never the type
+            st["gate_agents"] = (ga + [x for x in known if x and x not in ga])[-40:]
         if kind in ("judge", "explainer"):
             st["task_judges"] = st.get("task_judges", 0) + 1  # question-gate spawns do not eat the agent budget
         else:
             st["inflight"] = max(0, st.get("inflight", 0) - 1)  # the slot reserved in pre is now a counted spawn
         if is_async:
             st["inflight_bg"] = max(0, st.get("inflight_bg", 0) - 1)  # now a `pending` ledger row
-        if unlock:
-            st["judge_ok"] = st.get("judge_ok", 0) + unlock
         st["task_units"] = st.get("task_units", 0.0) + units(entry["model"], entry["effort"])
         remember_transcript(data, st)
         refresh_main_model(data, st)  # before pricing: the baseline is the main session's current model
@@ -2232,6 +2361,43 @@ def prune_locks(max_age=7 * 86400):
             pass
 
 
+def stale_install_note(root=None):
+    """One line when this hook runs from an old plugin cache folder while a newer copy is installed (a long-running
+    session keeps loading the version it started with); else None. Silent on any error and from the dev repo."""
+    try:
+        root = Path(root).resolve() if root else Path(__file__).resolve().parents[1]
+        cache = (Path.home() / ".claude" / "plugins" / "cache").resolve()
+        if cache not in root.parents:
+            return None
+        data = json.loads((Path.home() / ".claude" / "plugins" / "installed_plugins.json").read_text())
+        plugins = data.get("plugins") if isinstance(data.get("plugins"), dict) else data
+        entries = [e for k, v in plugins.items() if str(k).startswith("abofles@") and isinstance(v, list) for e in v if isinstance(e, dict) and e.get("installPath")]
+        if not entries or any(Path(e["installPath"]).expanduser().resolve() == root for e in entries):
+            return None
+        try:
+            old = json.loads((root / ".claude-plugin" / "plugin.json").read_text()).get("version") or root.name
+        except Exception:
+            old = root.name
+        def fresh(e):  # newest lastUpdated, then the newest install folder
+            try:
+                mt = Path(e["installPath"]).expanduser().stat().st_mtime
+            except Exception:
+                mt = 0
+            return (str(e.get("lastUpdated") or ""), mt)
+        new = next((e["version"] for e in sorted(entries, key=fresh, reverse=True) if e.get("version")), "a newer version")
+        return f"abofles: this session runs {old} from an old cache folder; {new} is installed — restart Claude Code to load it."
+    except Exception:
+        return None
+
+
+def install_note_once(st):
+    """The stale-install note, once per session (the state remembers it was checked). Call under the state lock."""
+    if st.get("install_checked"):
+        return None
+    st["install_checked"] = True
+    return stale_install_note()
+
+
 def start(data):
     """SessionStart: the marker the guard gates on, so it works from the first turn (before any spawn)."""
     sid = data.get("session_id", "")
@@ -2240,18 +2406,26 @@ def start(data):
         st = load_state(sid)
         st["started"] = int(time.time())
         st["direct_reads"] = 0
-        reset_task(st)
+        if src in ("startup", "clear"):  # a compact or a resume continues the same task
+            close_task(st, "session")  # also drops a receipt owed by the session that ended
+        else:
+            st["inflight"], st["inflight_bg"] = 0, 0  # no Agent call outlives the session that ended
+            if st.get("judge_ok", 0) > 0 and not unlock_live(st, ledger_rows(sid), time.time()):
+                st["judge_ok"] = 0
         remember_transcript(data, st)
         if data.get("cwd") and (not st.get("root") or src in ("startup", "clear")):
             st["root"] = data["cwd"]  # the project root for memo and overrides: fixed here, never moved by a later `cd`
         refresh_main_model(data, st)
         en = effort_note(data, st)
+        inote = install_note_once(st)
         root = project_root(data, st)
         g = refresh_guide(root, st, sid)
         save_state(sid, st)
     prune_locks()
     if en:
         print(en)
+    if inote:
+        print(inote)
     if memo_path(root).exists():
         git_exclude_memo(root)  # memos written before this rule existed
     block = resume_block(root, session_id=sid, guide=g)
@@ -2259,35 +2433,67 @@ def start(data):
         print(resume_note(block, {"compact": "context was just compacted", "resume": "session resumed", "clear": "context cleared"}.get(src, "new session, memo found")))
 
 
-def newest_state_path(cwd=None):
-    """The state file of the most recently active session — preferring one whose cwd is this project when several
-    sessions are open (a command runs in the project's directory; its own session touched the state last there)."""
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def session_arg(argv, keep=False):
+    """Take `--session <id>` out of `argv` (a list, edited in place) and return the first usable id, else None. An unexpanded
+    `${...}` value is dropped and ignored. A missing, empty or `--`-led value stays in `argv` for the script's own usage
+    check. `keep=True` leaves the usable pairs in `argv` too (status.py / memo.py read --session themselves)."""
+    found, i = None, 0
+    while i < len(argv):
+        if argv[i] == "--session" and i + 1 < len(argv) and argv[i + 1].strip() and not argv[i + 1].startswith("--"):
+            v = argv[i + 1].strip()
+            if "${" not in v and found is None:
+                found = v
+            if keep and "${" not in v:
+                i += 2
+            else:
+                del argv[i:i + 2]
+            continue
+        i += 1
+    return found
+
+
+def newest_state_path(cwd=None, session=None):
+    """The state file of the session a command belongs to. Order: env ABOFLES_SESSION; the explicit `session` when it is a
+    UUID (the command's own `${CLAUDE_SESSION_ID}`); among the states whose root is this project (or holds this folder after
+    a `cd`) the newest `last_prompt_ts`, then the newest mtime. A state of another project is never chosen."""
+    for cand in (os.environ.get("ABOFLES_SESSION"), session if UUID_RE.match((session or "").strip()) else None):
+        cand = "" if "${" in (cand or "") else re.sub(r"[^A-Za-z0-9_-]", "", cand or "")
+        if cand and state_path(cand).exists():
+            return state_path(cand)
     try:
-        states = sorted(STATE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        states = list(STATE_DIR.glob("*.json"))
     except Exception:
         return None
     want = os.path.realpath(cwd or os.getcwd())
-    inside = None
+    exact, inside = [], []
     for sp in states:
         try:
             st = json.loads(sp.read_text())
-            root = os.path.realpath(st.get("root") or st.get("cwd") or "")
-            if root and want == root:
-                return sp
-            if root and inside is None and want.startswith(root.rstrip("/") + "/"):
-                inside = sp  # a command run from a subfolder of the project (after a `cd`) still belongs to that session
+            raw = st.get("root") or st.get("cwd") or ""
+            if not raw:
+                continue
+            root = os.path.realpath(raw)
+            key = (float(st.get("last_prompt_ts") or 0), sp.stat().st_mtime)
+            if want == root:
+                exact.append((key, sp))
+            elif want.startswith(root.rstrip("/") + "/"):
+                inside.append((key, sp))  # a command run from a subfolder of the project (after a `cd`) still belongs to that session
         except Exception:
             continue
-    return inside or (states[0] if states else None)
+    pick = exact or inside
+    return max(pick, key=lambda x: x[0])[1] if pick else None
 
 
-def newest_session_id(cwd=None):
-    sp = newest_state_path(cwd)
+def newest_session_id(cwd=None, session=None):
+    sp = newest_state_path(cwd, session)
     return sp.stem if sp else ""
 
 
-def newest_state(cwd=None):
-    sp = newest_state_path(cwd)
+def newest_state(cwd=None, session=None):
+    sp = newest_state_path(cwd, session)
     try:
         return json.loads(sp.read_text()) if sp else {}
     except Exception:
@@ -2296,6 +2502,8 @@ def newest_state(cwd=None):
 
 READ_CMD = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(grep|rg|ag|find|fd|cat|head|less|sed\s+-n|awk|ls|tree|git\s+(grep|log|show|blame|diff|status)|jq|python3\s+-c\s+['\"]print)\b")
 WRITE_CMD = re.compile(r"(^|[^<>])>>?\s*[^&|]|<<|\btee\b")  # output redirected into a file, a heredoc, tee: not a read
+MCP_FREE = re.compile(r"^mcp__.+__(get\w*Issue|get\w*Page|getConfluenceContent)$", re.I)  # fetch-by-key (one issue / page): the first FREE_FETCHES per task are free; listings and searches (…Pages, …Spaces) count
+FREE_FETCHES = 2
 MCP_READ = re.compile(r"^mcp__.*__(get|search|read|list|fetch|query|view|find|lookup|describe|execute_?read)(?!en|_?or_?create|_?and_?replace)", re.I)
 
 
@@ -2330,7 +2538,9 @@ def guard(data):
         remember_transcript(data, st)
         en = effort_note(data, st)
         threshold = None
-        if not is_read:
+        if MCP_FREE.match(tool) and st.get("connector_free", 0) < FREE_FETCHES:
+            st["connector_free"] = st.get("connector_free", 0) + 1  # a ticket or page fetched by key: neither counts nor breaks the streak
+        elif not is_read:
             st["direct_reads"] = 0
             st["guard_warned_at"] = 0
         else:
@@ -2368,6 +2578,13 @@ def prompt(data):
         mins = break_minutes(cwd)
         ptxt = (data.get("prompt") or "").lstrip()
         notification = ptxt.startswith("<") or "task-notification" in ptxt[:200] or "hand-back" in ptxt[:200].lower()
+        if not notification:
+            st["last_prompt_ts"] = time.time()  # the session the user types in: scripts pick it among several of one project
+            if st.get("close_on_prompt"):
+                close_task(st, "prompt")  # no receipt was wanted: the task ended with the last answer
+            if not st.get("spawns_since_receipt"):
+                st["connector_free"] = 0  # a new ask with no open task: its first fetch-by-key reads are free again
+        inote = install_note_once(st)
         if last and mins and not notification and (time.time() - last) >= mins * 60:
             away = int((time.time() - last) // 60)
             block = resume_block(cwd, away, session_id=sid, guide=refresh_guide(cwd, st, sid))
@@ -2376,7 +2593,7 @@ def prompt(data):
         else:
             refresh_guide(cwd, st, sid)  # a row resolved from the band since the last hook: the ladder drops it now
         save_state(sid, st)
-    msg = "\n\n".join(m for m in (en, rn) if m)
+    msg = "\n\n".join(m for m in (en, rn, inote) if m)
     if msg:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": msg}}))
 
@@ -2417,24 +2634,34 @@ def receipt(data):
         close_stale_pending(st, sid, root)
         refresh_guide(root, st, sid)
         pending = st.get("spawns_since_receipt", 0)
-        unasked = (st.get("judge_ok", 0) > 0 and not data.get("stop_hook_active") and not background_running(sid)
+        live = unlock_live(st, ledger_rows(sid), time.time())  # an unlock from an earlier task, or an old one nobody is replying to, is dropped below
+        unasked = (live and not data.get("stop_hook_active") and not background_running(sid)
                    and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT)  # before reset_task clears the unlock; not while a gate agent is still replying
+        ok_before = st.get("judge_ok", 0)  # reset_task below zeroes it
         unasked_md = bool(st.get("explain_md"))
         ex_keep = {k: st[k] for k in EXPLAIN_KEYS if k in st}  # reset_task clears the explain state; an unlock that survives it keeps its own
         if pending and has_receipt(text):
-            reset_task(st)  # the receipt closes the task — even while a background agent of it is still running
+            close_task(st, "receipt")  # the receipt closes the task — even while a background agent of it is still running
         elif pending and not background_running(sid):  # a chain still running: the receipt is due when it ends
             kind, instruction = receipt_decision(root, st)
-            if kind == "skip" or data.get("stop_hook_active"):
-                reset_task(st)  # the task is closed (receipt not wanted, or the one nudge already spent)
+            owed = bool(st.get("receipt_owed"))  # a nudge went unanswered, or the last turn ended on a question: this Stop asks again
+            if ends_with_question(text) and not owed:
+                if kind != "skip":
+                    st["receipt_owed"] = True  # the task waits on the user's answer: no nudge now, the next turn's Stop asks; count, budget and gate answer stay open
+            elif kind == "skip":
+                st["close_on_prompt"] = True  # no receipt wanted: the task closes at the next real user prompt, not here
+            elif data.get("stop_hook_active"):
+                st["receipt_owed"] = True  # the one nudge is spent and no receipt came: the task stays open until one is printed
             else:
-                reasons.append(f"abofles: {pending} agent(s) spawned, no receipt. Print it now.\n" + instruction.removeprefix("abofles: "))
+                reasons.append(f"abofles: {pending} agent(s) spawned, no receipt{' (still owed from the last turn)' if owed else ''}. Print it now.\n" + instruction.removeprefix("abofles: "))
         elif not pending and st.get("gate") == "task" and not st.get("task_budget"):
             st["gate"], st["task_budget"], st["task_parallel"] = None, None, None  # "Main session only" was for that turn's task
-        if st.get("judge_ok", 0) > 0 and not unasked:
-            keep_unlock = st["judge_ok"]  # a gate agent is still replying: the unlock survives the task reset below
+        if live and not unasked:
+            keep_unlock = ok_before  # a gate agent is still replying: the unlock survives the task reset below
         else:
             keep_unlock = 0
+            if not live:
+                st["judge_ok"] = 0  # stale: made before the task began, or too old and no gate agent running
         if unasked:
             st["judge_ok"] = max(st.get("judge_ok", 0), 1)  # keep the unlock alive for the question that must follow
             st.update(ex_keep)
@@ -2443,9 +2670,16 @@ def receipt(data):
         if keep_unlock:
             st["judge_ok"] = max(st.get("judge_ok", 0), keep_unlock)
             st.update(ex_keep)
+        if st.get("judge_ok", 0) > 0 and (keep_unlock or unasked):  # restored after close_task: dated into the new task, so the next Stop does not drop it
+            sendmsg_unlock = bool(st.get("gate_wait_ts")) and (st.get("judge_ok_ts", 0) or 0) <= st["gate_wait_ts"]
+            st["judge_ok_ts"] = max(st.get("judge_ok_ts", 0) or 0, st.get("task_started", 0) or int(time.time()))
+            if sendmsg_unlock:
+                st["gate_wait_ts"] = st["judge_ok_ts"]  # stays a SendMessage unlock: it still expires after GATE_WAIT
         cw = context_watch(data, st)
         if cw:
             reasons.append(cw)
+        if st.get("receipt_owed"):
+            refresh_guide(root, st, sid)  # the "receipt owed" item was just raised
         save_state(sid, st)
     if rc:
         memo_journal(root, sid, rc)
@@ -2459,30 +2693,28 @@ def receipt(data):
         print(json.dumps({"decision": "block", "reason": "\n\n".join(reasons)}))
 
 
-def close_row(row, text, st, sid, cwd, how=""):
-    """Fill a pending ledger row from the agent's final text (or close it without one). Caller holds the state lock."""
+def close_row(row, text, st, sid, cwd, how="", note=""):
+    """Fill a pending ledger row from the agent's final text (or close it without one). `how` = where the text came from
+    (get_reply's code, or "lost"); `note` = a line for the row's warnings. Caller holds the state lock."""
     stype = row.get("agent") or ""
+    if not text and how != "lost":
+        how = "no_reply"
+    if how:
+        row["how"] = how
     if text:
-        fields, warnings = analyze(text, stype, row.get("cap"), row.get("cwd") or cwd, row.get("dirs") or ())
+        fields, warnings = analyze(text, stype, row.get("cap"), row.get("cwd") or cwd, row.get("dirs") or (), row_kind(row))
     else:  # no reply text (killed, timed out): close the row anyway so the chain can end
-        fields, warnings = {"status": "blocked", "confidence": "low"}, ["background agent ended without a reply"]
+        fields, warnings = {"status": "blocked", "confidence": "low"}, ["background agent lost: no transcript after %d min" % LOST_MIN if how == "lost" else "background agent ended without a reply"]
     row.update(fields)
     row.update(add_spend(st, sid, row.get("agent_id"), row.get("model"), f"{row.get('side') or '?'} {label(row.get('model'), row.get('effort'))}"))
-    kind = side_of(stype)[0]
-    if kind in ("judge", "explainer") and text:
-        verdict, q, a, ev = judge_fields(text)
+    kind = {"judge": "judge", "explain": "explainer"}.get(row_gate(row), "")
+    if kind and text:  # the same gate rule as a sync reply in post(): every judge block counts
+        verdict, gw, _ = apply_gate_reply(st, text, kind, sid, cwd, row.get("tier"), st.get("transcript_path") or "")
         row["verdict"] = verdict or None
-        if kind == "judge" and verdict == "ANSWERED":
-            memo_decision(cwd, sid, f"judge: {q}", f"{a}" + (f" ({ev})" if ev else ""))
-            if (row.get("tier") or 3) >= 3:
-                memo_needs(cwd, sid, f"judge decided ({tier_name(row.get('tier') or 3)}): {q} → {a} — check")
-        elif not (kind == "judge" and verdict == "HANDOFF"):
-            st["judge_ok"] = st.get("judge_ok", 0) + 1
-            md = explain_needs_markdown(text)  # as post() does for a sync reply: the Stop/qgate hooks then demand the printed explanation
-            explain_arm(st, md, explain_block(text) if md else "", transcript_size(st.get("transcript_path") or ""))
+        warnings = list(warnings) + gw
     row["completed_ts"] = int(time.time())
-    if how:
-        warnings = list(warnings) + [how]
+    if note:
+        warnings = list(warnings) + [note]
     row["warnings"] = warnings or None
 
 
@@ -2500,10 +2732,10 @@ def last_assistant_text(path):
     return text
 
 
-def last_assistant_reply(path):
-    """(text, handed_back) of the newest assistant message in a transcript. handed_back is True when the agent ended
-    its run with a SubagentHandback call — the background-agent equivalent of a final reply."""
-    for line in reversed(transcript_tail(path)):
+def assistant_replies(path, limit=1_000_000):
+    """(text, handed_back) of each assistant message of a transcript, newest first. handed_back is True for a SubagentHandback
+    call — the background-agent equivalent of a final reply. `limit` = bytes read from the end of the file."""
+    for line in reversed(transcript_tail(path, limit)):
         if '"assistant"' not in line:
             continue
         try:
@@ -2517,19 +2749,54 @@ def last_assistant_reply(path):
             if isinstance(p, dict) and p.get("type") == "tool_use" and "handback" in (p.get("name") or "").lower():
                 msg = (p.get("input") or {}).get("message") or (p.get("input") or {}).get("report") or ""
                 if msg:
-                    return str(msg).strip(), True
-        text = "\n".join(p.get("text") or "" for p in parts if isinstance(p, dict) and p.get("type") == "text").strip()
-        if text:
-            return text, False
-    return "", False
+                    yield str(msg).strip(), True
+                    break
+        else:
+            text = "\n".join(p.get("text") or "" for p in parts if isinstance(p, dict) and p.get("type") == "text").strip()
+            if text:
+                yield text, False
+
+
+REPLY_WINDOW = 2  # newest assistant messages searched for the report: a stub written after it is skipped, an older task's report is not taken
+
+
+def last_assistant_reply(path, limit=1_000_000):
+    """(text, handed_back) of the agent's report: the newest of the last REPLY_WINDOW assistant messages with a STATUS/VERDICT/
+    EXPLAIN header (a short stub written after the real report must not win), else the newest message. handed_back is the
+    newest message's flag — a headerless hand-back after a headed report is still a hand-back."""
+    first = None
+    for text, handed_back in itertools.islice(assistant_replies(path, limit), REPLY_WINDOW):
+        first = first or (text, handed_back)
+        if has_header(text):
+            return text, first[1]
+    return first or ("", False)
+
+
+def get_reply(st, sid, agent_id, hint):
+    """(text, how) — the text to grade for a subagent's reply. `hint` (the tool result / last_assistant_message) when it has
+    a header; else the newest of the last REPLY_WINDOW assistant texts of the agent's own transcript that has one ("transcript"); else the hint as
+    it is ("stub"); else ("", "no_reply"). The transcript is read only when the hint has no header."""
+    hint = hint or ""
+    if has_header(hint):
+        return hint, "hint"
+    tp = agent_transcript(st, sid, agent_id) if agent_id else None
+    if tp and tp.exists():
+        for text, _ in itertools.islice(assistant_replies(tp), REPLY_WINDOW):
+            if has_header(text):
+                return text, "transcript"
+    if hint.strip():
+        return hint, "stub"
+    return "", "no_reply"
 
 
 STALE_AFTER = 90  # seconds without a transcript write: the background agent has finished (or died)
+LOST_MIN = 30  # minutes a pending row may have no agent id or no transcript before it is closed as lost
 
 
 def close_stale_pending(st, sid, cwd):
     """Fallback for a SubagentStop that never reached the hook: a pending row whose transcript stopped growing
-    STALE_AFTER seconds ago is closed from that transcript's last assistant text. Caller holds the state lock."""
+    STALE_AFTER seconds ago is closed from that transcript's report (get_reply); a row with no agent id or no transcript
+    for LOST_MIN minutes is closed as lost (no escalation). Caller holds the state lock."""
     path = ledger_path(sid)
     try:
         rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
@@ -2539,17 +2806,25 @@ def close_stale_pending(st, sid, cwd):
     for row in rows:
         if row.get("status") != "pending":
             continue
-        tp = agent_transcript(st, sid, row.get("agent_id"))
+        tp = agent_transcript(st, sid, row.get("agent_id")) if row.get("agent_id") else None
         if not tp or not tp.exists():
+            if row.get("ts") and time.time() - row["ts"] > LOST_MIN * 60:
+                close_row(row, "", st, sid, cwd, how="lost")
+                closed += 1
             continue
         try:
             age = time.time() - tp.stat().st_mtime
         except Exception:
             continue
-        text, handed_back = last_assistant_reply(tp)
-        if not handed_back and age < STALE_AFTER:
+        idle = age >= STALE_AFTER
+        text, handed_back = last_assistant_reply(tp, 1_000_000 if idle else 64_000)  # a live agent: only the end of the file, for a hand-back
+        if not handed_back and not idle:
             continue
-        close_row(row, text, st, sid, cwd, how="closed from its transcript (handed back; no SubagentStop)" if handed_back else f"closed from its transcript (no SubagentStop; idle {int(age)}s)")
+        if has_header(text):
+            how = "hint"  # the transcript was just read: this is the report
+        else:
+            text, how = get_reply(st, sid, row.get("agent_id"), text)
+        close_row(row, text, st, sid, cwd, how=how, note="closed from its transcript (handed back; no SubagentStop)" if handed_back else f"closed from its transcript (no SubagentStop; idle {int(age)}s)")
         closed += 1
     if closed:
         write_rows(path, rows)
@@ -2559,7 +2834,7 @@ def close_stale_pending(st, sid, cwd):
 def stop(data):
     """SubagentStop: fill the `pending` entry written at async launch. Sync spawns have no pending entry (PostToolUse logs them)."""
     agent_id = data.get("agent_id")
-    text = data.get("last_assistant_message") or ""
+    hint = data.get("last_assistant_message") or ""
     if not agent_id:
         return
     sid = data.get("session_id", "")
@@ -2570,13 +2845,16 @@ def stop(data):
         except Exception:
             return
         idx = next((i for i, r in enumerate(rows) if r.get("agent_id") == agent_id and r.get("status") == "pending"), None)
+        if idx is None:  # closed as lost (no transcript seen in time) and the real report arrives late: grade it
+            idx = next((i for i, r in enumerate(rows) if r.get("agent_id") == agent_id and r.get("how") == "lost"), None)
         if idx is None:
             return
         st = load_state(sid)
         cwd = project_root(data, st)
         if data.get("agent_transcript_path"):
             st["agent_transcripts"] = {**(st.get("agent_transcripts") or {}), agent_id: data["agent_transcript_path"]}
-        close_row(rows[idx], text, st, sid, cwd)
+        text, how = get_reply(st, sid, agent_id, hint)  # the last message can be a stub written after the real report
+        close_row(rows[idx], text, st, sid, cwd, how=how)
         save_state(sid, st)
         write_rows(path, rows)
     # Never print anything here: SubagentStop output goes to the *subagent*, which then takes

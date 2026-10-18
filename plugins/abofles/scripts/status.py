@@ -23,11 +23,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 try:
-    from abofles_hook import label, context_tokens, context_marks, newest_transcript, newest_state, newest_session_id, usd, fmt_tokens, fmt_usd, PRICE_USD
+    from abofles_hook import label, context_tokens, context_marks, newest_transcript, newest_state, newest_session_id, usd, fmt_tokens, fmt_usd, PRICE_USD, session_arg
 except Exception:  # pragma: no cover
     context_tokens = context_marks = newest_transcript = None
-    newest_state = lambda: {}
-    newest_session_id = lambda: ""
+    newest_state = lambda *a, **k: {}
+    newest_session_id = lambda *a, **k: ""
+    session_arg = lambda argv, keep=False: None
     label = lambda m, e=None: f"{m} · {e}" if e else m
     usd = lambda m, u: 0.0
     fmt_tokens = str
@@ -51,12 +52,22 @@ def cost(model, effort):
     return PRICE.get(model, 40) * EFFORT.get(effort, 1.5)
 
 
-def ledger_files(all_sessions):
-    files = sorted(LEDGER_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+def resolve_ledger(sess=None):
+    """The one ledger of the session a command belongs to: ABOFLES_SESSION, else the command's `--session`, else the newest
+    prompt among this project's sessions (state root == cwd). Never the ledger of another project. None when there is none."""
+    cands = [os.environ.get("ABOFLES_SESSION"), sess, newest_session_id(os.getcwd(), sess)]
+    for c in cands:
+        c = "" if "${" in (c or "") else re.sub(r"[^A-Za-z0-9_-]", "", c or "")
+        if c and ledger_path(c).exists():
+            return ledger_path(c)
+    return None
+
+
+def ledger_files(all_sessions, sess=None):
     if all_sessions:
-        return files
-    mine = LEDGER_DIR / f"{newest_session_id()}.jsonl"  # this project's session, not whichever wrote last
-    return [mine] if mine.exists() else files[-1:]
+        return sorted(LEDGER_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+    f = resolve_ledger(sess)
+    return [f] if f else []
 
 
 def load(files):
@@ -115,7 +126,7 @@ def flag_value(args, flag):
     return True, (v if v.strip() and not v.startswith("--") else None)
 
 
-def settle(args):
+def settle(args, sess=None):
     """--resolve / --unresolve. Exit code: 0 changed, 1 no match / no ledger / error, 2 usage, 3 nothing to change."""
     if "--resolve" in args and "--unresolve" in args:
         print(USAGE)
@@ -126,19 +137,11 @@ def settle(args):
     if key is None or (has_sid and sid is None):
         print(USAGE)
         return 2
-    if has_sid:  # the guide band names the session whose ledger row it settles
-        f = ledger_path(sid)
-        sid = f.stem
-        if not f.exists():
-            print(f"abofles: no ledger for session {sid}")
-            return 1
-    else:
-        files = ledger_files(False)
-        if not files:
-            print("abofles: no ledger yet — nothing to " + ("reopen." if undo else "resolve."))
-            return 1
-        f = files[-1]  # this project's session
-        sid = f.stem
+    f = resolve_ledger(sess)  # the same ledger the display shows, so a row listed there can be settled here
+    if f is None:
+        print(f"abofles: no ledger for session {re.sub(r'[^A-Za-z0-9_-]', '', sid)}" if has_sid else "abofles: no ledger yet — nothing to " + ("reopen." if undo else "resolve."))
+        return 1
+    sid = f.stem
     with state_lock(sid):  # the hook appends and rewrites this file under the same lock
         try:
             lines = f.read_text().splitlines()
@@ -201,18 +204,21 @@ def settle(args):
 
 def main():
     args = sys.argv[1:]
+    if args[-2:] == ["--session", ""]:  # a command whose ${CLAUDE_SESSION_ID} expanded to nothing
+        del args[-2:]
+    sess = session_arg(args, keep=True)  # --session stays in args: --resolve / --unresolve read it themselves
     all_sessions = "--all" in args
     baseline = args[args.index("--baseline") + 1] if "--baseline" in args else "opus·high"
     bm, _, be = baseline.replace("-", "·").partition("·")
     if not be or "--assumed-effort" in args:
-        be = newest_state().get("effort") or be
+        be = newest_state(os.getcwd(), sess).get("effort") or be
     baseline = label(bm, be or "high")
     if "--resolve" in args or "--unresolve" in args:
-        sys.exit(settle(args))
+        sys.exit(settle(args, sess))
 
-    files = ledger_files(all_sessions)
+    files = ledger_files(all_sessions, sess)
     if not files:
-        print("abofles: no spawns logged yet.")
+        print("abofles: no spawns logged yet." if all_sessions else "abofles: no ledger for this session yet")
         return
 
     rows = [r for _, rs in load(files) for r in rs]
@@ -235,7 +241,7 @@ def main():
         tp = newest_transcript()
         tk = context_tokens(str(tp)) if tp else None
         if tk is not None:
-            marks = context_marks(newest_state().get("root") or os.getcwd())
+            marks = context_marks(newest_state(os.getcwd(), sess).get("root") or os.getcwd())
             nxt = next((m for m in marks if tk < m * 1000), None)
             print(f"Context:    {tk // 1000}K tokens · " + (f"next compact warning at {nxt}K" if nxt else "past the last mark — run /abofles:memo, then /compact"))
     print()

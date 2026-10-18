@@ -22,14 +22,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import memo_path, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path  # noqa: E402
+from abofles_hook import memo_path, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg  # noqa: E402
 
 
 def main():
     args = sys.argv[1:]
-    st = newest_state()
+    if args[-2:] == ["--session", ""]:  # a command whose ${CLAUDE_SESSION_ID} expanded to nothing
+        del args[-2:]
+    sess = session_arg(args, keep=bool(args) and args[0] in ("resolve", "reopen"))  # those two read --session themselves
+    st = newest_state(os.getcwd(), sess)
     cwd = st.get("root") or os.getcwd()  # the project root the session started in, not the folder a `cd` left us in
-    sp = newest_state_path()
+    sp = newest_state_path(os.getcwd(), sess)
     sid = sp.stem if sp else ""  # the session id (its state file), so the Now block and receipts carry the same tag
     cmd = args[0] if args else "show"
     if cmd == "path":
@@ -50,10 +53,12 @@ def main():
         i = 1
         while i < len(args):  # --session takes a value; everything else that is not --trace is the note
             if args[i] == "--session":
-                a_sid = args[i + 1] if i + 1 < len(args) else ""
-                if not a_sid.strip() or a_sid.startswith("--"):
+                v = args[i + 1] if i + 1 < len(args) else ""
+                if not v.strip() or v.startswith("--"):
                     print(usage)
                     sys.exit(2)
+                if a_sid is None:  # the first one wins: the user's own, before the command's appended fallback
+                    a_sid = v
                 i += 2
                 continue
             if args[i] != "--trace":
