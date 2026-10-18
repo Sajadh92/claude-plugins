@@ -2,6 +2,10 @@
 
 All notable changes to the plugins in this marketplace.
 
+## abofles 1.5.0 — 2026-10-19
+
+- abofles: the memo is split — the main `.claude/abofles-memo.md` keeps only what must not be missed (Needs you, notes, a Sessions index with one link line per session: last update, task, next, receipts), and each session writes its own `.claude/abofles-memo.d/<session>.md` (Now, Journal, its questions and answers). A receipt rewrites one small file plus one index line instead of the whole memo; the resume block and the guide read this session's file plus the main memo; `show --all` prints the main memo and this session's file only (`--main`: the main memo). A pre-1.5 one-file memo is split on its first read; the git exclude already covers the folder.
+
 ## abofles 1.4.0 — 2026-10-19
 
 - abofles: harness notes (`[harness: …]` blocks) are no longer graded as part of an agent's reply, so they no longer trigger length or format warnings.

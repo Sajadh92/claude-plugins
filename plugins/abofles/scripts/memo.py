@@ -2,7 +2,8 @@
 """Abo Fles memo: the work journal the hooks keep in `.claude/abofles-memo.md`.
 
     memo.py show                 the resume block (now · next · needs you · last receipts)
-    memo.py show --all           the whole memo file
+    memo.py show --all           the main memo, then this session's file
+    memo.py show --main          the main memo only (Needs you, Decisions, Sessions index)
     memo.py resolve <n> [note] [--trace] [--session <sid>]   tick item n of "Needs you" (--trace: one "resolved by hand" line in Journal)
     memo.py reopen <n> [--trace] [--session <sid>]           turn a resolved item n back to open (drops the resolve note)
       --session <sid> stamps the trace with that session instead of the newest one (two sessions in one root)
@@ -10,11 +11,12 @@
                   · 3 nothing to change (already resolved / already open) — no trace line is written
     memo.py note <text>          add a user note to Decisions (something settled in chat)
     memo.py now < text           replace the Now section from stdin (what /abofles:memo writes)
-    memo.py path                 print the memo path
+    memo.py path                 print the main memo path (`path mine`: this session's file)
 
-The hooks fill Journal (one line per receipt), Needs you (ATTENTION, FAIL, owner decisions from the
-receipts' `open` line) and Decisions (every AskUserQuestion with its answer). Only Now is written by
-the model, through `now`.
+Layout: `.claude/abofles-memo.md` (main: Needs you, Decisions = notes, Sessions = one index line per
+session with a link) and `.claude/abofles-memo.d/<session>.md` (Now, Journal = one line per receipt,
+Decisions = that session's questions with their answers). The hooks fill everything but Now, which
+the model writes through `now`.
 """
 import os
 import re
@@ -22,7 +24,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import memo_path, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg  # noqa: E402
+from abofles_hook import memo_path, session_memo_path, sess_read, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg  # noqa: E402
 
 
 def main():
@@ -36,13 +38,17 @@ def main():
     sid = sp.stem if sp else ""  # the session id (its state file), so the Now block and receipts carry the same tag
     cmd = args[0] if args else "show"
     if cmd == "path":
-        print(memo_path(cwd))
+        print(session_memo_path(cwd, sid) if "mine" in args[1:] else memo_path(cwd))
     elif cmd == "show":
-        if "--all" in args:
+        if "--all" in args or "--main" in args:
             try:
-                print(memo_path(cwd).read_text())
+                out = memo_path(cwd).read_text()
             except Exception:
                 print("abofles: no memo yet — it is written at the first receipt, or by /abofles:memo.")
+                return
+            if "--all" in args and sid and session_memo_path(cwd, sid).exists():
+                out += "\n\n" + session_memo_path(cwd, sid).read_text()
+            print(out)
             return
         block = resume_block(cwd, session_id=sid, guide=(st.get("guide") or {}).get("line"))
         print(block or "abofles: no memo yet — it is written at the first receipt, or by /abofles:memo.")

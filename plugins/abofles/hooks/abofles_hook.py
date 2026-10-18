@@ -498,11 +498,11 @@ def guide_entries(root, st, sid, ctx_state=None):
         elif nxt * 1000 - tk <= 50_000:
             items.append(guide_item("🧠", f"context {tk // 1000}K, mark {nxt}K is {(nxt * 1000 - tk) // 1000}K away — plan /abofles:memo + /compact at the next task boundary", "/abofles:memo", id=f"ctx:{nxt}"))
     try:
-        mine = next((b for k, b in now_blocks(memo_read(root)["Now"]) if k == sid8(sid)), None)
-        wm = re.search(r"^Written\s+(\S+ \S+)", mine or "", re.M)
+        ss = sess_read(root, sid)
+        wm = re.search(r"^Written\s+(\S+ \S+)", ss["Now"], re.M)
         if wm:
             age_min = int((time.time() - time.mktime(time.strptime(wm.group(1), "%Y-%m-%d %H:%M"))) // 60)
-            since = sum(1 for l in memo_read(root)["Journal"].splitlines() if f"s:{sid8(sid)}" in l and not TRACE_RE.search(l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > wm.group(1)[5:])
+            since = sum(1 for l in ss["Journal"].splitlines() if not TRACE_RE.search(l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > wm.group(1)[5:])
             if age_min >= 120 and since:
                 items.append(guide_item("🧠", f"memo Now is {span(age_min)} old with {since} receipt{'s' if since > 1 else ''} since — run /abofles:memo before the next break", "/abofles:memo", id="memo-age"))
     except Exception:
@@ -516,7 +516,7 @@ def guide_entries(root, st, sid, ctx_state=None):
     if not items:
         nxt_line = ""
         try:
-            mine = next((b for k, b in now_blocks(memo_read(root)["Now"]) if k == sid8(sid)), None) or ""
+            mine = sess_read(root, sid)["Now"]
             nm = re.search(r"^Next\s+(.+)$", mine, re.M)
             nxt_line = nm.group(1).strip() if nm else ""
         except Exception:
@@ -560,8 +560,12 @@ def refresh_guide(root, st, sid):
 
 
 # ── Memo: the work journal the hooks keep for the user ───────────────────────────────────────────────
-MEMO_SECTIONS = ("Now", "Needs you", "Decisions", "Journal")
-JOURNAL_KEEP = 40
+MEMO_SECTIONS = ("Needs you", "Decisions", "Sessions")  # the main memo: what must not be missed, project-wide notes, the session index
+SESSION_SECTIONS = ("Now", "Journal", "Decisions")  # one file per session under abofles-memo.d/
+MEMO_DIR_NAME = "abofles-memo.d"  # covered by the `.claude/abofles-memo.*` git exclude
+JOURNAL_KEEP = 40  # receipts per session file
+INDEX_KEEP = 12  # session lines in the main memo
+DECISIONS_KEEP = 60
 NEEDS_RE = re.compile(r"ATTENTION|VERDICT:? ?FAIL|\bFAIL\b|owner|decide|decision|confirm|approve|choose|pick|\?", re.I)
 
 
@@ -576,6 +580,14 @@ def project_root(data=None, st=None):
 
 def memo_path(cwd):
     return Path(cwd or os.getcwd()) / ".claude" / "abofles-memo.md"
+
+
+def memo_dir(cwd):
+    return memo_path(cwd).with_suffix(".d")
+
+
+def session_memo_path(cwd, session_id):
+    return memo_dir(cwd) / f"{sid8(session_id) or 'legacy'}.md"
 
 
 def git_exclude_memo(cwd):
@@ -607,6 +619,9 @@ def break_minutes(cwd):
     return int(m.group(1)) if m else 10
 
 
+_MEMO_HELD = set()  # lock paths this process holds (memo_lock is re-entrant)
+
+
 class memo_lock:
     """The memo is shared by every session in a project; serialise read-modify-write."""
     def __init__(self, cwd):
@@ -614,15 +629,19 @@ class memo_lock:
         self.path = STATE_DIR / "memo-locks" / f"{key}.lock"  # never inside the project: a stray .lock there shows in git status
         self.fh = None
     def __enter__(self):
+        if str(self.path) in _MEMO_HELD:  # already held by this process (a migration inside a locked write): no second flock
+            return self
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.fh = open(self.path, "w")
             fcntl.flock(self.fh, fcntl.LOCK_EX)
+            _MEMO_HELD.add(str(self.path))
         except Exception:
             self.fh = None
         return self
     def __exit__(self, *a):
         if self.fh:
+            _MEMO_HELD.discard(str(self.path))
             try:
                 fcntl.flock(self.fh, fcntl.LOCK_UN)
                 self.fh.close()
@@ -630,13 +649,9 @@ class memo_lock:
                 pass
 
 
-def memo_read(cwd):
-    """Sections of the memo file as {name: body}; missing file -> empty sections."""
-    sec = {k: "" for k in MEMO_SECTIONS}
-    try:
-        txt = memo_path(cwd).read_text()
-    except Exception:
-        return sec
+def _sections(txt, names):
+    """`## <name>` sections of a memo file as {name: body}; names not in `names` are skipped."""
+    sec = {k: "" for k in names}
     cur = None
     for line in txt.splitlines():
         m = re.match(r"^## (.+?)\s*$", line)
@@ -648,10 +663,29 @@ def memo_read(cwd):
     return {k: v.strip("\n") for k, v in sec.items()}
 
 
+def memo_read(cwd):
+    """Sections of the main memo as {name: body}: Needs you, Decisions (notes), Sessions (the index). Missing file -> empty.
+    A one-file memo from before 1.5 (Now blocks and Journal inside) is split into the session files first."""
+    try:
+        txt = memo_path(cwd).read_text()
+    except Exception:
+        return {k: "" for k in MEMO_SECTIONS}
+    if re.search(r"^## (Now|Journal)\s*$", txt, re.M):
+        memo_migrate(cwd, txt)
+        try:
+            txt = memo_path(cwd).read_text()
+        except Exception:
+            return {k: "" for k in MEMO_SECTIONS}
+    return _sections(txt, MEMO_SECTIONS)
+
+
 def memo_write(cwd, sec, session_id=""):
+    """Write the main memo: header, Needs you, Decisions, Sessions. Atomic; the first write excludes `.claude/abofles-memo.*`
+    (the file and the `.d` folder) from git."""
     path = memo_path(cwd)
     stamp = time.strftime("%Y-%m-%d %H:%M")
-    head = f"# Abo Fles memo — {Path(cwd or os.getcwd()).name}\nUpdated: {stamp}" + (f" · session {session_id[:8]}" if session_id else "") + "\n"
+    head = (f"# Abo Fles memo — {Path(cwd or os.getcwd()).name}\nUpdated: {stamp}" + (f" · session {session_id[:8]}" if session_id else "")
+            + f" · one file per session in [{MEMO_DIR_NAME}/]({MEMO_DIR_NAME}/)\n")
     body = "".join(f"\n## {k}\n{sec.get(k, '').strip()}\n" for k in MEMO_SECTIONS)
     try:
         new = not path.exists()
@@ -665,8 +699,106 @@ def memo_write(cwd, sec, session_id=""):
         pass
 
 
+def sess_read(cwd, session_id):
+    """Sections of one session's memo file as {Now, Journal, Decisions}; missing file -> empty sections."""
+    try:
+        return _sections(session_memo_path(cwd, session_id).read_text(), SESSION_SECTIONS)
+    except Exception:
+        return {k: "" for k in SESSION_SECTIONS}
+
+
+def sess_write(cwd, session_id, sec):
+    """Write one session's memo file (atomic). The header links back to the main memo."""
+    path = session_memo_path(cwd, session_id)
+    head = (f"# Session {sid8(session_id) or 'legacy'} — {Path(cwd or os.getcwd()).name} · [memo](../abofles-memo.md)\n"
+            f"Updated: {time.strftime('%Y-%m-%d %H:%M')}\n")
+    body = "".join(f"\n## {k}\n{sec.get(k, '').strip()}\n" for k in SESSION_SECTIONS)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(head + body)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def index_line(session_id, sec, stamp=None):
+    """One line of the main memo's Sessions index: link · updated · task · next · receipts — the headers of a session file."""
+    now = now_raw(sec.get("Now", ""))
+    first = lambda k: re.sub(r"^\S+\s+", "", (now.get(k) or [""])[0]).strip()
+    jl = [l for l in sec.get("Journal", "").splitlines() if l.strip() and not TRACE_RE.search(l)]
+    sid = sid8(session_id) or "legacy"
+    bits = [f"- [{sid}]({MEMO_DIR_NAME}/{sid}.md)", stamp or time.strftime("%m-%d %H:%M")]
+    if first("Task"):
+        bits.append("task: " + clip(first("Task"), 70))
+    if first("Next"):
+        bits.append("next: " + clip(first("Next"), 70))
+    bits.append(f"receipts: {len(jl)}")
+    return " · ".join(bits)
+
+
+def index_set(sec, session_id, line):
+    """Put `line` first in sec["Sessions"], replacing that session's old line; INDEX_KEEP lines kept."""
+    sid = sid8(session_id) or "legacy"
+    others = [l for l in sec.get("Sessions", "").splitlines() if l.strip() and not l.startswith(f"- [{sid}](")]
+    sec["Sessions"] = "\n".join([line] + others[:INDEX_KEEP - 1])
+
+
+def index_entries(sec):
+    """[(sid, line)] of the Sessions index, newest first."""
+    out = []
+    for l in sec.get("Sessions", "").splitlines():
+        m = re.match(r"- \[([0-9a-z_-]+)\]\(", l)
+        if m:
+            out.append((m.group(1), l))
+    return out
+
+
+def index_field(line, key):
+    m = re.search(r" · " + key + r": (.+?)(?= · (?:task|next|receipts): |$)", line)
+    return m.group(1).strip() if m else ""
+
+
+def memo_touch(cwd, session_id, ssec, main=None):
+    """Write a session file and refresh its line in the main index (main sections read when not given). Caller holds the lock."""
+    sess_write(cwd, session_id, ssec)
+    sec = main if main is not None else memo_read(cwd)
+    index_set(sec, session_id, index_line(session_id, ssec))
+    memo_write(cwd, sec, session_id)
+
+
+def memo_migrate(cwd, txt):
+    """Split a pre-1.5 one-file memo: each Now block and the journal lines tagged `s:<id>` go to that session's file,
+    untagged ones to the session named in the header (else `legacy`); Decisions stay in the main memo; the index is built."""
+    old = _sections(txt, ("Now", "Needs you", "Decisions", "Journal"))
+    writer = re.search(r"· session (\w+)", txt[:300])
+    default = writer.group(1)[:8] if writer else ""
+    with memo_lock(cwd):
+        files = {}
+        for k, b in now_blocks(old["Now"]):
+            sid = k or default
+            files.setdefault(sid, {s: "" for s in SESSION_SECTIONS})["Now"] = b
+        for l in old["Journal"].splitlines():
+            if not l.strip():
+                continue
+            m = re.search(r" · s:([0-9a-z_-]{1,12}) ·", l)
+            sid = m.group(1) if m else default
+            s = files.setdefault(sid, {k: "" for k in SESSION_SECTIONS})
+            s["Journal"] += re.sub(r" · s:[0-9a-z_-]{1,12} ·", " ·", l) + "\n"
+        sec = {"Needs you": old["Needs you"], "Decisions": old["Decisions"], "Sessions": ""}
+        for sid, s in files.items():
+            s["Journal"] = "\n".join(s["Journal"].splitlines()[:JOURNAL_KEEP])
+            sess_write(cwd, sid, s)
+            wm = re.search(r"^Written\s+\d{4}-(\d\d-\d\d \d\d:\d\d)", s["Now"], re.M)
+            jm = re.match(r"- (\d\d-\d\d \d\d:\d\d)", s["Journal"])
+            stamp = max(wm.group(1) if wm else "", jm.group(1) if jm else "") or time.strftime("%m-%d %H:%M")
+            index_set(sec, sid, index_line(sid, s, stamp))
+        sec["Sessions"] = "\n".join(sorted(sec["Sessions"].splitlines(), key=lambda l: re.sub(r"^- \[[^\]]+\]\([^)]+\) · ", "", l), reverse=True)[:INDEX_KEEP])
+        memo_write(cwd, sec, default)
+
+
 def memo_updated(cwd):
-    """The `Updated:` stamp of the memo, or None."""
+    """The `Updated:` stamp of the main memo, or None."""
     try:
         m = re.search(r"^Updated: (\S+ \S+)", memo_path(cwd).read_text(), re.M)
         return m.group(1) if m else None
@@ -719,14 +851,18 @@ def needs_items(open_line):
 TRACE_RE = re.compile(r"· (resolved|reopened) by hand:")  # a hand-trace journal line is not a receipt: receipt counters skip it
 
 
+def journal_add(sec, entry):
+    """Prepend one line to a session's Journal, JOURNAL_KEEP kept."""
+    lines = [l for l in sec.get("Journal", "").splitlines() if l.strip()]
+    sec["Journal"] = "\n".join(([entry] + lines)[:JOURNAL_KEEP])
+
+
 def memo_trace(cwd, session_id, text):
-    """One non-receipt line in the Journal: `- MM-DD HH:MM · s:<sid8> · resolved by hand: …`."""
+    """One non-receipt line in this session's Journal: `- MM-DD HH:MM · resolved by hand: …`."""
     with memo_lock(cwd):
-        sec = memo_read(cwd)
-        entry = f"- {time.strftime('%m-%d %H:%M')} · " + (f"s:{sid8(session_id)} · " if session_id else "") + clip(text, 200)
-        lines = [l for l in sec["Journal"].splitlines() if l.strip()]
-        sec["Journal"] = "\n".join(([entry] + lines)[:JOURNAL_KEEP])
-        memo_write(cwd, sec, session_id)
+        s = sess_read(cwd, session_id)
+        journal_add(s, f"- {time.strftime('%m-%d %H:%M')} · " + clip(text, 200))
+        memo_touch(cwd, session_id, s)
 
 
 def memo_journal(cwd, session_id, rc):
@@ -735,17 +871,17 @@ def memo_journal(cwd, session_id, rc):
 
 
 def _memo_journal(cwd, session_id, rc):
-    """Append a receipt to the journal (newest first, JOURNAL_KEEP kept) and its must-see items to Needs you."""
-    sec = memo_read(cwd)
+    """A receipt: one Journal line in the session file (newest first), this session's Now rewritten from it, its must-see
+    items added to the main memo's Needs you, and the session's index line refreshed."""
     stamp = time.strftime("%m-%d %H:%M")
     bits = [clip(rc["header"], 120)]
     for k in ("done", "check", "open"):
         if rc.get(k):
             bits.append(f"{k}: {clip(rc[k])}")
-    entry = f"- {stamp} · " + (f"s:{sid8(session_id)} · " if session_id else "") + " · ".join(bits)
-    lines = [l for l in sec["Journal"].splitlines() if l.strip()]
-    sec["Journal"] = "\n".join([entry] + lines)[: 20000]
-    sec["Journal"] = "\n".join(sec["Journal"].splitlines()[:JOURNAL_KEEP])
+    s = sess_read(cwd, session_id)
+    journal_add(s, f"- {stamp} · " + " · ".join(bits))
+    s["Now"] = now_text(receipt_now(cwd, s["Now"], rc), " · from receipt")  # the band's "next from the memo" must follow the receipt, not the last /abofles:memo
+    sec = memo_read(cwd)
     need = [l for l in sec["Needs you"].splitlines() if l.strip()]
     have = [need_key(l) for l in need]
     for item in needs_items(rc.get("open")):
@@ -754,13 +890,11 @@ def _memo_journal(cwd, session_id, rc):
             need.append(f"{len(need) + 1}. [ ] {stamp} · {item}" + (f" (s:{sid8(session_id)})" if session_id else ""))
             have.append(key)
     sec["Needs you"] = "\n".join(need)
-    mine = next((b for k, b in now_blocks(sec["Now"]) if k == sid8(session_id)), "")
-    now_set(sec, session_id, receipt_now(cwd, mine, rc), " · from receipt")  # the band's "next from the memo" must follow the receipt, not the last /abofles:memo
-    memo_write(cwd, sec, session_id)
+    memo_touch(cwd, session_id, s, sec)
 
 
 def memo_needs(cwd, session_id, item):
-    """Add one item to Needs you (deduplicated)."""
+    """Add one item to the main memo's Needs you (deduplicated)."""
     with memo_lock(cwd):
         _memo_needs(cwd, session_id, item)
 
@@ -773,7 +907,7 @@ def need_key(line):
     """The item text of a Needs-you line without number, box, stamp, session tag and resolution note — for deduplication."""
     t = re.sub(r"^\d+\. \[.\] \S+ \S+ · ", "", line.strip()).split(" → resolved")[0]
     t = re.sub(r"\s*\(s:[0-9a-f]{4,8}\)\s*$", "", t)
-    return " ".join(re.findall(r"[\w\u0600-\u06FF]+", t.lower()))[:120]
+    return " ".join(re.findall(r"[\w؀-ۿ]+", t.lower()))[:120]
 
 
 def _memo_needs(cwd, session_id, item):
@@ -808,10 +942,18 @@ def memo_decision(cwd, session_id, question, answer):
 
 
 def _memo_decision(cwd, session_id, question, answer):
+    """A question with its answer. A session's own questions go to its file; a `note` (settled in chat, project-wide) and a
+    decision with no session go to the main memo, where every session sees them."""
+    entry = f"- {time.strftime('%m-%d %H:%M')} · {clip(question, 140)} → {clip(answer, 140)}"
+    if session_id and question != "note":
+        s = sess_read(cwd, session_id)
+        lines = [l for l in s["Decisions"].splitlines() if l.strip()] + [entry]
+        s["Decisions"] = "\n".join(lines[-DECISIONS_KEEP:])
+        memo_touch(cwd, session_id, s)  # the main memo (and its index line) exists from the first decision on
+        return
     sec = memo_read(cwd)
-    lines = [l for l in sec["Decisions"].splitlines() if l.strip()]
-    lines.append(f"- {time.strftime('%m-%d %H:%M')} · {clip(question, 140)} → {clip(answer, 140)}")
-    sec["Decisions"] = "\n".join(lines[-60:])
+    lines = [l for l in sec["Decisions"].splitlines() if l.strip()] + [entry]
+    sec["Decisions"] = "\n".join(lines[-DECISIONS_KEEP:])
     memo_write(cwd, sec, session_id)
 
 
@@ -847,11 +989,8 @@ def memo_reopen(cwd, n, session_id=""):
     return None
 
 
-NOW_BLOCKS = 6  # Now blocks kept (one per session that wrote one; several sessions may share a project root)
-
-
 def now_blocks(now_text):
-    """The Now section as [(sid8 or "", block text)] — one block per session, split on `Session   <id>` lines."""
+    """A pre-1.5 Now section as [(sid8 or "", block text)] — one block per session, split on `Session   <id>` lines (migration)."""
     blocks, cur, buf = [], "", []
     for line in (now_text or "").splitlines():
         m = re.match(r"^Session\s+(\S+)", line)
@@ -866,23 +1005,17 @@ def now_blocks(now_text):
     return blocks
 
 
-def now_set(sec, session_id, text, mark=""):
-    """Put `text` (a Now body: Task/Done/Left/Decisions/Next/Verify/Tree lines) in this session's block of sec["Now"], stamped
-    `Written <date time>` plus `mark`; other sessions' blocks stay. The caller holds the memo lock and writes the file."""
-    me = sid8(session_id)
-    body = f"Written   {time.strftime('%Y-%m-%d %H:%M')}{mark}\n" + re.sub(r"^(Written|Session)\s+.*\n?", "", text.strip(), flags=re.M).strip()
-    others = [(k, b) for k, b in now_blocks(sec["Now"]) if k != me and k][:NOW_BLOCKS - 1]
-    mine = (f"Session   {me}\n" if me else "") + body
-    sec["Now"] = "\n\n".join([mine] + [f"Session   {k}\n{b}" for k, b in others])
+def now_text(text, mark=""):
+    """A Now body (Task/Done/Left/Decisions/Next/Verify/Tree lines) stamped `Written <date time>` plus `mark`."""
+    return f"Written   {time.strftime('%Y-%m-%d %H:%M')}{mark}\n" + re.sub(r"^(Written|Session)\s+.*\n?", "", text.strip(), flags=re.M).strip()
 
 
 def memo_now(cwd, text, session_id=""):
-    """Replace this session's block of the Now section (what /abofles:memo writes); other sessions' blocks and the hook
-    sections stay. Several Claude sessions in one project root each keep their own Now."""
+    """Replace this session's Now (what /abofles:memo writes) and refresh its index line; the hook sections stay."""
     with memo_lock(cwd):
-        sec = memo_read(cwd)
-        now_set(sec, session_id, text)
-        memo_write(cwd, sec, session_id)
+        s = sess_read(cwd, session_id)
+        s["Now"] = now_text(text)
+        memo_touch(cwd, session_id, s)
 
 
 NOW_LABEL_RE = re.compile(r"^(Written|Task|Done|Left|Decisions|Next|Verify|Tree)(\s|$)")
@@ -973,64 +1106,61 @@ def field_lines(tag, items):
     return [f"- `{tag}` →"] + [f"  - {x}" for x in items]
 
 
-def resume_block(cwd, away_min=None, session_id="", guide=None):
-    """The short block to print after a break, a compact or a new session. None when there is no memo.
-    With several sessions in one project root: this session's Now block and receipts; the others' only as labelled hints."""
-    if not memo_path(cwd).exists():
-        return None
-    sec = memo_read(cwd)
-    me = sid8(session_id)
-    blocks = now_blocks(sec["Now"])
-    mine = next((b for k, b in blocks if k == me), None)
-    if mine is None and not me:
-        mine = next((b for k, b in blocks if not k), None)
-    others = [(k, b) for k, b in blocks if k and k != me]
-    if mine is None and len(blocks) == 1 and not blocks[0][0]:
-        try:  # a memo written before sessions were tagged: it is mine only when this session wrote it last
-            writer = re.search(r"· session (\w+)", memo_path(cwd).read_text()[:300])
-        except Exception:
-            writer = None
-        if not me or (writer and writer.group(1) == me):
-            mine = blocks[0][1]
-        else:
-            others = [(writer.group(1) if writer else "untagged", blocks[0][1])] + others
-    now = {}
-    key = None
-    for line in (mine or "").splitlines():
+def memo_exists(cwd):
+    return memo_path(cwd).exists()
+
+
+def now_fields(block):
+    """A Now body as {label: [items]} — label lines plus their continuation lines (Tree continuations left out)."""
+    now, key = {}, None
+    for line in (block or "").splitlines():
         m = re.match(r"^(Written|Task|Done|Left|Decisions|Next|Verify|Tree)\s+(.*)$", line)  # one space after `Decisions` (9 chars, padded to 10)
         if m:
             key = m.group(1)
             now.setdefault(key, []).append(m.group(2).strip())
         elif key and line.strip() and key not in ("Tree",):
             now[key].append(line.strip())  # a continuation line, or a second `Left` item written without its label
+    return now
+
+
+def resume_block(cwd, away_min=None, session_id="", guide=None):
+    """The short block to print after a break, a compact or a new session. None when there is no memo.
+    Built from this session's file (Now, receipts) and the main memo (Needs you, the other sessions' index lines)."""
+    if not memo_exists(cwd):
+        return None
+    sec = memo_read(cwd)
+    me = sid8(session_id)
+    entries = index_entries(sec)
+    if not me and entries:
+        me = entries[0][0]  # no session given: the newest one
+    s = sess_read(cwd, me) if me else {k: "" for k in SESSION_SECTIONS}
+    mine = s["Now"] or None
+    others = [(k, l) for k, l in entries if k != me]
+    now = now_fields(mine)
     written = (now.get("Written") or [None])[0]
     from_receipt = "from receipt" in (written or "")
     wm0 = re.match(r"\d{4}-\d\d-\d\d \d\d:\d\d", written or "")
     written = wm0.group(0) if wm0 else written
     age = ""
     newer = 0
+    jall = [l for l in s["Journal"].splitlines() if l.strip() and not TRACE_RE.search(l)]  # `last` = receipts; a hand-trace line is not one
     if written:
         try:
             age_min = int((time.time() - time.mktime(time.strptime(written, "%Y-%m-%d %H:%M"))) // 60)
             age = f" · now written {written}" + (" from receipt" if from_receipt else "") + (f" ({span(age_min)} ago)" if age_min >= 60 else "")
-            wm = written[5:]
             if written[:4] == time.strftime("%Y"):  # journal stamps carry no year: compare only within the year the memo was written
-                newer = sum(1 for l in sec["Journal"].splitlines() if re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > wm
-                            and not TRACE_RE.search(l) and (not me or f"s:{me}" in l))
+                newer = sum(1 for l in jall if re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > written[5:])
         except Exception:
             pass
     open_items = [l for l in sec["Needs you"].splitlines() if "[ ]" in l]
-    jall = [l for l in sec["Journal"].splitlines() if l.strip()]
-    jmine = [l for l in jall if f"s:{me}" in l] if me else jall
-    jother = [l for l in jall if l not in jmine]
-    jmine = [l for l in jmine if not TRACE_RE.search(l)]  # `last` = receipts; a hand-trace line is not one
-    jother = [l for l in jother if not TRACE_RE.search(l)]
-    journal = jmine[:3] or [re.sub(r"· s:([0-9a-f]+) ·", r"· (session \1, not this one) ·", l) for l in jother[:2]]
+    journal = [clip(re.sub(r"^- ", "", l), 140) for l in jall[:3]]
+    if not journal and others:  # nothing of this session yet: the other sessions' headers, labelled as theirs
+        journal = [clip(f"(session {k}, not this one) · " + re.sub(r"^- \[[^\]]+\]\([^)]+\) · ", "", l), 140) for k, l in others[:2]]
     head = f"📍 **Resume** · memo {memo_updated(cwd) or '?'}" + (f" · away {span(away_min)}" if away_min else "") + (f" · session {me}" if me else "") + age
     lines = [head]
     items = lambda k: [i for x in now.get(k, []) if x for i in split_items(x)]
     if mine is None and others:
-        lines.append("- `now` → no Now section from this session yet — " + ", ".join(f"session {k} wrote: {clip(next((l.split(None, 1)[1] for l in b.splitlines() if l.startswith('Task')), ''), 70)}" for k, b in others[:3]) + " (their work, not yours)")
+        lines.append("- `now` → no Now section from this session yet — " + ", ".join(f"session {k} wrote: {clip(index_field(l, 'task') or '?', 70)}" for k, l in others[:3]) + " (their work, not yours)")
     lines += field_lines("now", items("Task"))
     lines += field_lines("left", items("Left"))
     lines += field_lines("next", items("Next"))
@@ -1045,7 +1175,7 @@ def resume_block(cwd, away_min=None, session_id="", guide=None):
     else:
         lines.append("- `needs you` → none")
     if journal:
-        lines += field_lines("last", [clip(re.sub(r"^- ", "", l), 140) for l in journal])
+        lines += field_lines("last", journal)
     if guide:
         lines.append(f"- `guide` → {guide}")
     return "\n".join(lines)

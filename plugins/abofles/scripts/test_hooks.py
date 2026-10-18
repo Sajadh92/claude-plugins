@@ -327,29 +327,31 @@ def main():
         MEMO = Path(__file__).resolve().parent / "memo.py"
         memo = lambda *a, inp=None: _sp.run([sys.executable, str(MEMO), *a], cwd=cwd, input=inp, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led)).stdout
         mf = Path(cwd, ".claude", "abofles-memo.md")
+        sf = lambda sid_: Path(cwd, ".claude", "abofles-memo.d", f"{sid_[:8]}.md")  # one file per session: Now, Journal, Decisions
         if mf.exists(): mf.unlink()  # earlier receipt tests already journaled into it
+        pin("mm")  # memo.py below must act on this session's file
         check("memo: none yet", "no memo yet" in memo("show"))
         rtxt = ("🧾 **2 Spawns · 1.6M Tokens · $0.18 · Saved 84% ($0.92)** vs Opus 5.5\n- `done` → AqsatiRules.cs: cap added; tests 3\n- `why` → money rule\n"
                 "- `check` → `dotnet test` → 13 passed\n- `open` → ATTENTION: USD orders uncapped (OrderPricingRules.cs:77); owner decision: cap per currency?; FE #541 merging")
         run("start", {"session_id": "mm", "cwd": cwd}, led)
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="mm"), led)
         out = run("receipt", {"session_id": "mm", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": rtxt}, led)
-        txt = mf.read_text()
-        check("memo: receipt -> journal line with header, done, check, open", out is None and "## Journal" in txt and "2 Spawns · 1.6M Tokens" in txt and "done: AqsatiRules.cs: cap added" in txt and "check: `dotnet test`" in txt)
+        txt = mf.read_text(); jt = sf("mm").read_text()
+        check("memo: receipt -> journal line (session file) with header, done, check, open; main memo indexes the session", out is None and "## Journal" in jt and "2 Spawns · 1.6M Tokens" in jt and "done: AqsatiRules.cs: cap added" in jt and "check: `dotnet test`" in jt and "- [mm](abofles-memo.d/mm.md)" in txt and "## Journal" not in txt)
         check("memo: needs-you gets ATTENTION + owner decision, not chain state", "1. [ ]" in txt and "ATTENTION: USD orders uncapped" in txt and "2. [ ]" in txt and "owner decision: cap per currency?" in txt and "FE #541" not in txt.split("## Decisions")[0].split("## Needs you")[1])
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="mm"), led)
         run("receipt", {"session_id": "mm", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": rtxt}, led)
-        check("memo: same open item not duplicated; journal newest first", mf.read_text().count("ATTENTION: USD orders uncapped") == 1 + 2 + 2 and mf.read_text().count("[ ]") == 2)  # Needs you once, two journal lines, and the Now block's Left and Next
+        check("memo: same open item not duplicated; journal newest first", mf.read_text().split("## Sessions")[0].count("ATTENTION: USD orders uncapped") == 1 and sf("mm").read_text().count("ATTENTION: USD orders uncapped") == 2 + 2 and mf.read_text().count("[ ]") == 2)  # Needs you once (the index line repeats it as `next:`); two journal lines and the Now block's Left and Next in the session file
         # decision log from AskUserQuestion
         run("decision", {"session_id": "mm", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Cap in IQD only?", "options": []}]}, "tool_response": {"answers": {"Cap in IQD only?": "Yes, IQD only"}}}, led)
-        check("memo: AskUserQuestion logged with answer", "Cap in IQD only? → Yes, IQD only" in mf.read_text())
+        check("memo: AskUserQuestion logged with answer in the session file", "Cap in IQD only? → Yes, IQD only" in sf("mm").read_text() and "Cap in IQD only?" not in mf.read_text())
         # now section via memo.py, resolve, show
         memo("now", inp="Task      cap the surcharge\nLeft      FE tests\nNext      run the FE suite\nVerify    dotnet test → 13 passed\n")
         blk = memo("show")
         check("memo: resume block has now/left/next/needs you/last", "📍 **Resume**" in blk and "- `now` → cap the surcharge" in blk and "- `next` → run the FE suite" in blk and "- `needs you` → 2 open\n  - 1) ATTENTION" in blk and "\n  - 2) owner decision" in blk and "- `last` →" in blk)
         check("memo: resolve ticks item 2", "resolved:" in memo("resolve", "2", "per currency") and "2. [x]" in mf.read_text() and "→ resolved" in mf.read_text() and "1 open" in memo("show"))
         check("memo: note goes to Decisions", "noted" in memo("note", "surcharge stays 5,000 IQD") and "note → surcharge stays 5,000 IQD" in mf.read_text())
-        check("memo: hook sections survive a second `now`", memo("now", inp="Task      next task\n") and "Cap in IQD only?" in mf.read_text() and "## Journal" in mf.read_text() and "next task" in mf.read_text() and "cap the surcharge" not in mf.read_text().split("## Needs you")[0])
+        check("memo: hook sections survive a second `now`", memo("now", inp="Task      next task\n") and "Cap in IQD only?" in sf("mm").read_text() and "## Journal" in sf("mm").read_text() and "next task" in sf("mm").read_text() and "cap the surcharge" not in sf("mm").read_text().split("## Journal")[0] and "task: next task" in mf.read_text())
         # break detection on prompt: default 10 min, override, off
         stf = Path(state, "mm.json"); stj = json.loads(stf.read_text()); stj["last_activity"] = int(time.time()) - 11 * 60; stf.write_text(json.dumps(stj))
         out = ctx(run("prompt", {"session_id": "mm", "cwd": cwd}, led))
@@ -456,7 +458,7 @@ def main():
         check("qgate: SendMessage to a gate agent this session spawned unlocks", "unlocked" in ctx(out) and run("qgate", aq2, led) is None)
         ans = "STATUS: done\nCONFIDENCE: high\nVERDICT: ANSWERED\nQUESTION: Is the cap per unit?\nANSWER: Yes, per unit\nEVIDENCE:\n- src/a.cs:12 — cap applied inside the unit loop"
         out = run("post", jp(2, ans), led)
-        check("qgate: T2 ANSWERED -> decision logged, no needs-you, no unlock", "judge ANSWERED from evidence" in ctx(out) and "judge: Is the cap per unit? → Yes, per unit (src/a.cs:12" in mf.read_text() and "judge decided" not in mf.read_text() and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 0)
+        check("qgate: T2 ANSWERED -> decision logged, no needs-you, no unlock", "judge ANSWERED from evidence" in ctx(out) and "judge: Is the cap per unit? → Yes, per unit (src/a.cs:12" in sf("qg").read_text() and "judge decided" not in mf.read_text() and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 0)
         out = run("post", jp(4, ans), led)
         check("qgate: T4 ANSWERED -> also in Needs you", "judge decided (🔴 Critical): Is the cap per unit? → Yes, per unit — check" in mf.read_text())
         hand = "STATUS: done\nCONFIDENCE: medium\nVERDICT: HANDOFF\nQUESTION: Per unit or per order?\nEVIDENCE:\n- src/a.cs:10 — cap read here\nWHY: money"
@@ -482,10 +484,10 @@ def main():
         check("root: a compact in a nested folder keeps the root", json.loads(Path(state, "rt.json").read_text()).get("root") == cwd)
         run("post", dict(agent("haiku", "low", resp=good, cwd=str(nested)), session_id="rt"), led)
         run("receipt", {"session_id": "rt", "cwd": str(nested), "stop_hook_active": False, "last_assistant_message": rtxt}, led)
-        check("root: receipt from a nested cwd journals into the root memo", not Path(nested, ".claude").exists() and "AqsatiRules.cs" in mf.read_text())
+        check("root: receipt from a nested cwd journals into the root memo", not Path(nested, ".claude").exists() and "AqsatiRules.cs" in sf("rt").read_text())
         check("root: no lock file inside the project", not list(Path(cwd, ".claude").glob("*.lock")))
         run("decision", {"session_id": "rt", "cwd": str(nested), "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Nested: merge now?", "options": []}]}, "tool_response": {"answers": {"Nested: merge now?": "Yes"}}}, led)
-        check("root: decision from a nested cwd lands in the root memo", "Nested: merge now? → Yes" in mf.read_text() and not Path(nested, ".claude").exists())
+        check("root: decision from a nested cwd lands in the root memo", "Nested: merge now? → Yes" in sf("rt").read_text() and not Path(nested, ".claude").exists())
         import subprocess as _sp3
         _sp3.run(["git", "init", "-q", cwd], capture_output=True)
         mf.unlink()
@@ -493,10 +495,10 @@ def main():
         check("root: a new memo is added to .git/info/exclude", ".claude/abofles-memo.*" in Path(cwd, ".git", "info", "exclude").read_text())
         # 2. dismissed answers are not decisions; Decisions keeps the question sentence, not the story
         run("decision", {"session_id": "rt", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Dismiss me?", "options": []}]}, "tool_response": {"answers": {"Dismiss me?": "[User dismissed — do not proceed, wait for next instruction]"}}}, led)
-        check("decision: dismissed answer not logged", "Dismiss me?" not in mf.read_text())
+        check("decision: dismissed answer not logged", "Dismiss me?" not in sf("rt").read_text() and "Dismiss me?" not in mf.read_text())
         story = "A long story about the payroll file and three rows for one deduction that the board shows. Which row counts as the deduction? — read the explanation above first"
         run("decision", {"session_id": "rt", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": story, "header": "Rows", "options": []}]}, "tool_response": {"answers": {story: "The last one"}}}, led)
-        check("decision: the question sentence is kept, with the header", "[Rows] Which row counts as the deduction? → The last one" in mf.read_text() and "A long story" not in mf.read_text().split("## Decisions")[1])
+        check("decision: the question sentence is kept, with the header", "[Rows] Which row counts as the deduction? → The last one" in sf("rt").read_text() and "A long story" not in sf("rt").read_text().split("## Decisions")[1])
         # 3. an answered question ticks the Needs-you item that raised it
         run("receipt", {"session_id": "rt", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y\n- `open` → owner decision: should the surcharge round up or down?"}, led)
         check("needs: item added", "surcharge round up or down" in mf.read_text().split("## Needs you")[1].split("## Decisions")[0])
@@ -514,12 +516,12 @@ def main():
         # receipt with sub-bullets parses and journals
         run("receipt", {"session_id": "rt", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` →\n  - a.cs: cap\n  - b.cs: tests\n- `why` → rule\n- `check` → `dotnet test` → 13 passed\n- `open` →\n  - ATTENTION: subbullet alpha\n  - owner decision: subbullet beta?"}, led)
         nb = mf.read_text().split("## Needs you")[1].split("## Decisions")[0]
-        check("receipt: sub-bullet items parsed into journal and Needs you", "done: a.cs: cap; b.cs: tests" in mf.read_text() and "subbullet alpha" in nb and "subbullet beta?" in nb)
+        check("receipt: sub-bullet items parsed into journal and Needs you", "done: a.cs: cap; b.cs: tests" in sf("rt").read_text() and "subbullet alpha" in nb and "subbullet beta?" in nb)
         memo("now", inp="Task      t\nLeft      FE tests\nLeft      BE migration\n          docs page\nNext      n\n")
         check("resume: Now section stamped", "now written 20" in blk)
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rt"), led)
         run("receipt", {"session_id": "rt", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": rtxt}, led)
-        stf = Path(cwd, ".claude", "abofles-memo.md"); old = stf.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), time.strftime("Written   %Y-01-01 00:00")); stf.write_text(old)  # a receipt rewrites Now itself: age it after the receipt
+        stf = sf("rt"); old = stf.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), time.strftime("Written   %Y-01-01 00:00")); stf.write_text(old)  # a receipt rewrites Now itself: age it after the receipt
         blk = memo("show")
         check("resume: old Now shows its age and the receipts since", ("hours" in blk.splitlines()[0] or "day" in blk.splitlines()[0]) and "ago)" in blk and "- `since` → " in blk and "may be stale" in blk)
         # 5. a receipt closes the task even while a background agent of it still runs
@@ -672,8 +674,8 @@ def main():
         pin("msA")
         memo("now", inp="Task      A: cap ticket\nNext      A: verify cap\n")
         txt = mf.read_text()
-        check("multi: Now holds one block per session", txt.count("Session   ms") == 2 and "A: cap ticket" in txt and "B: docs ticket" in txt)
-        check("multi: journal lines and Needs-you items carry the session tag", "s:msA · " in txt and "s:msB · " in txt and "(s:msA)" in txt)
+        check("multi: one file per session, both indexed in the main memo", "- [msA](abofles-memo.d/msA.md)" in txt and "- [msB](abofles-memo.d/msB.md)" in txt and "task: A: cap ticket" in txt and "task: B: docs ticket" in txt and "A: cap ticket" in sf("msA").read_text() and "B: docs ticket" in sf("msB").read_text())
+        check("multi: each session's receipts in its own file; Needs-you items carry the session tag", "session A built the cap" in sf("msA").read_text() and "session A built" not in sf("msB").read_text() and "session B wrote the docs" in sf("msB").read_text() and "(s:msA)" in txt)
         blkA = memo("show")
         check("multi: resume shows this session's Now and receipts only", "session msA" in blkA.splitlines()[0] and "- `now` → A: cap ticket" in blkA and "B: docs" not in blkA.split("- `last`")[0] and "session A built the cap" in blkA and "session B wrote the docs" not in blkA)
         pin("msB")
@@ -710,7 +712,7 @@ def main():
         genv = dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)
         rr = _sp.run(yi["resolve"], cwd=cwd, capture_output=True, text=True, env=genv)
         check("trace: status --resolve --trace settles the row", rr.returncode == 0 and "resolved 1 entry" in rr.stdout)
-        check("trace: one resolved-by-hand line in the Journal with the session tag", len([l for l in mf.read_text().splitlines() if "· s:gu · resolved by hand: escalate · Unit Test · Read " in l and l.count("escalate") == 1]) == 1)
+        check("trace: one resolved-by-hand line in the Journal with the session tag", len([l for l in sf("gu").read_text().splitlines() if "· resolved by hand: escalate · Unit Test · Read " in l and l.count("escalate") == 1]) == 1)
         check("trace: the resume block does not list a hand-trace under last and counts no receipt for it", "resolved by hand: escalate" not in memo("show").split("- `last`")[-1] and "- `since` → 1 receipt" not in memo("show"))
         gout = _sp.run([sys.executable, str(GU := Path(__file__).resolve().parent / "guide.py"), "--all"], cwd=cwd, capture_output=True, text=True, env=genv).stdout
         check("trace: a resolved escalate leaves the guide", "🟡 escalate" not in gout)
@@ -724,7 +726,7 @@ def main():
         check("trace: unresolve miss exits 1", ur3.returncode == 1)
         _sp.run(yi["resolve"][:-2] + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
         _sp.run(yi["unresolve"] + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
-        check("trace: --unresolve --trace writes reopened by hand", "· s:gu · reopened by hand: escalate · Unit Test" in mf.read_text())
+        check("trace: --unresolve --trace writes reopened by hand", "· reopened by hand: escalate · Unit Test" in sf("gu").read_text())
         _sp.run(yi["unresolve"], cwd=cwd, capture_output=True, text=True, env=genv)
         out = run("receipt", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "🧾 **3 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y\n- `open` → owner decision: cap per currency?"}, led)
         run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "source": "resume"}, led)
@@ -740,7 +742,7 @@ def main():
               and od.get("unresolve") == [sys.executable, str(Path(__file__).resolve().parent / "memo.py"), "reopen", "1", "--trace", "--session", "gu"] and od.get("recheck") is None)
         rout = _sp.run(od["resolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)).stdout
         check("guide: running the owner decision's resolve command ticks it in the memo", rout.startswith("resolved:") and "1. [x]" in mf.read_text())
-        check("trace: memo resolve --trace journals the owner decision", any("resolved by hand: owner decision 1: " in l and "(s:" not in l.split("by hand:")[1] for l in mf.read_text().splitlines()))
+        check("trace: memo resolve --trace journals the owner decision", any("resolved by hand: owner decision 1: " in l and "(s:" not in l.split("by hand:")[1] for l in sf("gu").read_text().splitlines()))
         rop = _sp.run(od["unresolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
         check("memo reopen: item is open again and the resolve note is gone", rop.returncode == 0 and any(l.startswith("1. [ ] ") and "→ resolved" not in l for l in mf.read_text().splitlines()))
         rop = _sp.run(od["unresolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
@@ -866,7 +868,7 @@ def main():
         run("start", {"session_id": sA, "cwd": pa}, led)
         H.memo_now(pa, "Task      old task\nDone      old done\nLeft      old left\nDecisions keep: tables are printed above the box\nNext      old next\nVerify    old verify\nTree      M old.cs", sA)
         run("receipt", {"session_id": sA, "cwd": pa, "stop_hook_active": False, "last_assistant_message": RC1}, led)
-        nowA = H.memo_read(pa)["Now"]
+        nowA = H.sess_read(pa, sA)["Now"]
         check("now auto: a receipt rewrites this session's Now (between tasks, Done, Left lines, Next = first open item, Verify)",
               "Task      none — between tasks" in nowA and "Done      capped the surcharge in AqsatiRules.cs" in nowA and "Left      wire the FE badge\nLeft      update the docs page" in nowA
               and "Next      wire the FE badge" in nowA and "Verify    `dotnet test` → 13 passed" in nowA and "old left" not in nowA and "old next" not in nowA and "old done" not in nowA)
@@ -877,7 +879,7 @@ def main():
         blkA = H.resume_block(pa, session_id=sA)
         check("now auto: resume block reads the receipt-stamped Now (no 'since' stale line, left and next shown)", "now written " in blkA and "from receipt" in blkA and "- `since`" not in blkA and "- `next` → wire the FE badge" in blkA)
         run("receipt", {"session_id": sA, "cwd": pa, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5 · open: none"}, led)
-        nowA2 = H.memo_read(pa)["Now"]
+        nowA2 = H.sess_read(pa, sA)["Now"]
         check("now auto: short receipt with open none -> no Left, Next ready, Done/Verify/Decisions kept",
               "Left" not in nowA2 and "Next      none — ready for the next task" in nowA2 and "capped the surcharge" in nowA2 and "13 passed" in nowA2 and "Decisions keep:" in nowA2)
         nx_ = next((i for i in gitems(sA) if i.get("id") == "next"), {})
@@ -887,15 +889,15 @@ def main():
             Path(pg, "a.txt").write_text("x")
             run("start", {"session_id": "autogit1", "cwd": pg}, led)
             run("receipt", {"session_id": "autogit1", "cwd": pg, "stop_hook_active": False, "last_assistant_message": RC1}, led)
-            check("now auto: Tree = git status --short of the project root", "Tree      ?? a.txt" in H.memo_read(pg)["Now"])
+            check("now auto: Tree = git status --short of the project root", "Tree      ?? a.txt" in H.sess_read(pg, "autogit1")["Now"])
             Path(pg, "a.txt").unlink()
             run("receipt", {"session_id": "autogit1", "cwd": pg, "stop_hook_active": False, "last_assistant_message": RC1}, led)
-            check("now auto: Tree = clean when git status is empty", "Tree      clean" in H.memo_read(pg)["Now"])
+            check("now auto: Tree = clean when git status is empty", "Tree      clean" in H.sess_read(pg, "autogit1")["Now"])
         # the 'memo Now is old' item goes away right after a receipt
         pb = tempfile.mkdtemp(); sB = "agesess01"
         run("start", {"session_id": sB, "cwd": pb}, led)
         run("receipt", {"session_id": sB, "cwd": pb, "stop_hook_active": False, "last_assistant_message": RC1}, led)
-        stb = Path(pb, ".claude", "abofles-memo.md"); stb.write_text(stb.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), "Written   2020-01-01 00:00"))
+        stb = H.session_memo_path(pb, sB); stb.write_text(stb.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), "Written   2020-01-01 00:00"))
         run("prompt", {"session_id": sB, "cwd": pb}, led)
         check("now auto: an old Now with receipts since still raises the memo-age item", "memo-age" in [i.get("id") for i in gitems(sB)])
         run("receipt", {"session_id": sB, "cwd": pb, "stop_hook_active": False, "last_assistant_message": RC1}, led)
@@ -949,6 +951,27 @@ def main():
         H.memo_trace(pr, sR, "resolved by hand: escalate · X")
         lastpart = H.resume_block(pr, session_id=sR).split("- `last`")[1]
         check("resume last: the newest 3 receipts, no hand-trace line", lastpart.count("\n  - ") == 3 and "built r4" in lastpart and "built r2" in lastpart and "built r1" not in lastpart and "by hand" not in lastpart)
+        # 4b. a pre-1.5 one-file memo is split on first read: Now blocks and tagged journal lines per session, Decisions and Needs you kept, index built
+        pm = tempfile.mkdtemp(); Path(pm, ".claude").mkdir()
+        Path(pm, ".claude", "abofles-memo.md").write_text(
+            "# Abo Fles memo — x\nUpdated: 2026-10-14 14:30 · session oldsess1\n\n## Now\nSession   oldsess1\nWritten   2026-10-14 14:30 · from receipt\nTask      none — between tasks\nLeft      band buttons not pressed\nNext      band buttons not pressed\n\n"
+            "Session   oldsess2\nWritten   2026-10-13 10:00\nTask      cap ticket\nNext      verify cap\n\n## Needs you\n1. [ ] 10-14 14:30 · band buttons not pressed (s:oldsess1)\n\n## Decisions\n- 10-14 06:47 · note → ship = tag + release\n\n"
+            "## Journal\n- 10-14 14:30 · s:oldsess1 · 2 Spawns · $0.88 vs Opus 5.5 · done: band fixes\n- 10-13 10:05 · s:oldsess2 · 1 Spawn · $0.10 vs Opus 5.5 · done: capped\n- 10-12 09:00 · 1 Spawn · $0.05 vs Opus 5.5 · done: untagged line\n")
+        msec = H.memo_read(pm)
+        mtxt = H.memo_path(pm).read_text()
+        f1, f2 = H.sess_read(pm, "oldsess1"), H.sess_read(pm, "oldsess2")
+        check("migrate: main memo keeps Needs you and Decisions, gains the Sessions index, loses Now and Journal",
+              "band buttons not pressed (s:oldsess1)" in msec["Needs you"] and "note → ship = tag + release" in msec["Decisions"] and "## Now" not in mtxt and "## Journal" not in mtxt
+              and msec["Sessions"].startswith("- [oldsess1](abofles-memo.d/oldsess1.md) · 10-14 14:30 · task: none — between tasks · next: band buttons not pressed · receipts: 2") and "- [oldsess2](abofles-memo.d/oldsess2.md) · 10-13 10:05 · task: cap ticket · next: verify cap · receipts: 1" in msec["Sessions"])
+        check("migrate: each session file holds its Now and its journal lines (tag dropped; untagged lines go to the header's session)",
+              "Task      none — between tasks" in f1["Now"] and "Session " not in f1["Now"] and f1["Journal"].splitlines() == ["- 10-14 14:30 · 2 Spawns · $0.88 vs Opus 5.5 · done: band fixes", "- 10-12 09:00 · 1 Spawn · $0.05 vs Opus 5.5 · done: untagged line"]
+              and "Task      cap ticket" in f2["Now"] and f2["Journal"] == "- 10-13 10:05 · 1 Spawn · $0.10 vs Opus 5.5 · done: capped")
+        rb1 = H.resume_block(pm, session_id="oldsess1-full-id")
+        rb3 = H.resume_block(pm, session_id="newsess99")
+        check("migrate: the resume block reads the split files", "- `now` → none — between tasks" in rb1 and "- `next` → band buttons not pressed" in rb1 and "band fixes" in rb1 and "capped" not in rb1
+              and "no Now section from this session yet" in rb3 and "session oldsess1 wrote: none — between tasks" in rb3 and "(session oldsess1, not this one)" in rb3)
+        H.memo_journal(pm, "oldsess2", H.parse_receipt("🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → more cap\n- `check` → ok"))
+        check("migrate: a later receipt lands in its session file and moves that session to the top of the index", H.memo_read(pm)["Sessions"].startswith("- [oldsess2](") and "receipts: 2" in H.memo_read(pm)["Sessions"].splitlines()[0] and "more cap" in H.sess_read(pm, "oldsess2")["Journal"] and "more cap" not in H.sess_read(pm, "oldsess1")["Journal"])
         # 5. memo_resolve / memo_reopen pass the session on
         H.memo_needs(pr, "needsess1", "owner decision: pick A or B")
         H.memo_resolve(pr, 1, "ok", "ressess01")
@@ -1339,7 +1362,8 @@ def main():
         txt = lf.read_text().splitlines()
         check("exit: status --resolve exits 0, marks the row, keeps the half-written line verbatim",
               r1.returncode == 0 and json.loads(txt[0]).get("resolved") is True and txt[1] == 'HALF{"agent_id":"abc9' and json.loads(txt[2]) == {"agent_id": "abd1", "status": "blocked"})
-        mem = Path(xp, ".claude", "abofles-memo.md")
+        memd = lambda s: Path(xp, ".claude", "abofles-memo.d", f"{s[:8]}.md")  # a trace lands in the file of the session it names
+        mem = memd("xs")
         check("exit: status --resolve --trace wrote one Journal line", mem.read_text().count("resolved by hand:") == 1)
         r2 = st_("--resolve", "abc1", "--session", "xs", "--trace")
         check("exit: status --resolve of a resolved row exits 3, writes no trace", r2.returncode == 3 and mem.read_text().count("resolved by hand:") == 1)
@@ -1352,12 +1376,12 @@ def main():
         check("exit: memo resolve --session without a value exits 2", me_("resolve", "1", "--session").returncode == 2 and me_("reopen", "1", "--session", "--trace").returncode == 2)
         check("exit: memo reopen of an open item exits 3, writes no trace", me_("reopen", "1", "--trace").returncode == 3 and "reopened by hand" not in mem.read_text())
         m1 = me_("resolve", "1", "note", "--trace", "--session", "mysess")
-        check("exit: memo resolve exits 0 and the trace carries the given session", m1.returncode == 0 and "· s:mysess · resolved by hand: owner decision 1" in mem.read_text())
-        n_ = mem.read_text().count("by hand:")
+        check("exit: memo resolve exits 0 and the trace carries the given session", m1.returncode == 0 and "· resolved by hand: owner decision 1" in memd("mysess").read_text())
+        n_ = memd("mysess").read_text().count("by hand:")
         m2 = me_("resolve", "1", "--trace", "--session", "mysess")
-        check("exit: memo resolve of a resolved item exits 3, writes no trace", m2.returncode == 3 and mem.read_text().count("by hand:") == n_)
+        check("exit: memo resolve of a resolved item exits 3, writes no trace", m2.returncode == 3 and memd("mysess").read_text().count("by hand:") == n_)
         check("exit: memo resolve of a missing item exits 1", me_("resolve", "9").returncode == 1 and me_("reopen", "9").returncode == 1)
-        check("exit: memo reopen exits 0 with the given session", me_("reopen", "1", "--trace", "--session", "other").returncode == 0 and "· s:other · reopened by hand" in mem.read_text())
+        check("exit: memo reopen exits 0 with the given session", me_("reopen", "1", "--trace", "--session", "other").returncode == 0 and "· reopened by hand" in memd("other").read_text())
 
     # scripts: project-scoped ledger, the user's --session wins, a trailing empty --session is ignored
     sdir = Path(__file__).resolve().parent
@@ -1386,8 +1410,8 @@ def main():
         # memo.py: the user's own --session wins over the command's appended one
         subprocess.run([sys.executable, "-c", "import sys,os; sys.path.insert(0, sys.argv[1]); import abofles_hook as h; h.memo_needs(os.getcwd(), 'sessAAAA', 'owner decision: pick A or B')", str(sdir.parent / "hooks")], cwd=xp, env=xenv)
         r = sc_("memo.py", "resolve", "1", "--trace", "--session", "mysessX", "--session", sid_)
-        mem = Path(xp, ".claude", "abofles-memo.md").read_text()
-        check("session: memo resolve with the user's --session X plus an appended UUID stamps X", r.returncode == 0 and "· s:mysessX · resolved by hand" in mem and f"s:{sid_}" not in mem)
+        memx = lambda s: Path(xp, ".claude", "abofles-memo.d", f"{s[:8]}.md")
+        check("session: memo resolve with the user's --session X plus an appended UUID traces into X's file", r.returncode == 0 and "· resolved by hand" in memx("mysessX").read_text() and not memx(sid_).exists())
         # an empty trailing --session "" (unexpanded command variable) is ignored
         for name, args in (("agents.py", ()), ("status.py", ("--baseline", "opus")), ("bill.py", ("--baseline", "opus")), ("guide.py", ()), ("memo.py", ("show",))):
             r = sc_(name, *args, "--session", "")
