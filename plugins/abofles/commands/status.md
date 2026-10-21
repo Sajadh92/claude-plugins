@@ -1,13 +1,13 @@
 ---
 description: "Session summary from the ledger: spawns per model as bars, confidence, and the open follow-ups (partial, blocked, low, ATTENTION, FAIL); --resolve <id> closes one"
 argument-hint: "[--all] [--resolve <agent id>] [--unresolve <agent id>] [--session <sid>] [--trace <text>]"
-allowed-tools: Bash(python3 *)
+allowed-tools: Bash(bash *)
 ---
 
 Run the status script and show its output to the user unchanged, inside a code block:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/status.py" $ARGUMENTS --baseline <your current main-session model> --session "${CLAUDE_SESSION_ID}"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/py" "${CLAUDE_PLUGIN_ROOT}/scripts/status.py" $ARGUMENTS --baseline <your current main-session model> --session "${CLAUDE_SESSION_ID}"
 ```
 
 Use the alias of the model you are running on (`haiku`, `sonnet`, `opus`, `fable`). The script reads the session's effort from the state the hooks keep; add `·<effort>` only when the user stated a different one.

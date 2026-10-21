@@ -81,10 +81,10 @@ Two inputs: the topic's **tier** (Step 2) and the ask's **intent**. Print one wo
 **Look it up, never read a list.** 1,100+ topics in 27 domains live in an index; one Bash call returns the top 3 with tier, cells, reviewers, workflow and suggestions (≤ 7 lines):
 
 ```
-python3 "<plugin>/scripts/topic.py" find "<the ask, 3–8 content words>"
+bash "<plugin>/scripts/py" "<plugin>/scripts/topic.py" find "<the ask, 3–8 content words>"
 ```
 
-The exact path is in the SessionStart note `abofles: topic lookup = …` (else `<this skill's base dir>/../../scripts/topic.py`). Run it once per task before the workflow line; the call is free of the direct-read guard. Pick the match that names the *work*, not the code it touches; several unrelated topics → the highest tier, or one agent per independent topic. `topic.py show <#|name>` prints one topic's header template; `domains` the domain table ([references/topics.md](references/topics.md)); `list <CODE>` a domain. Project overrides are already applied in the output (`· Project Override`). No match → fast tier test below + the closest domain; name the nearest topic in the route line and tell the user the topic is new. A `💡 suggest` line names a package or tool fit for the topic and the project's stack (e.g. DynamicWhere.ex on .NET dynamic filtering): put it in the Plan/Work prompt and tell the user in one line; never install it unasked.
+Copy the exact command from the SessionStart note `abofles: topic lookup = …` (it names the plugin path; `scripts/py` picks python3, python or py -3, so it also works on Windows). Run it once per task before the workflow line; the call is free of the direct-read guard. Pick the match that names the *work*, not the code it touches; several unrelated topics → the highest tier, or one agent per independent topic. `topic.py show <#|name>` prints one topic's header template; `domains` the domain table ([references/topics.md](references/topics.md)); `list <CODE>` a domain. Project overrides are already applied in the output (`· Project Override`). No match → fast tier test below + the closest domain; name the nearest topic in the route line and tell the user the topic is new. A `💡 suggest` line names a package or tool fit for the topic and the project's stack (e.g. DynamicWhere.ex on .NET dynamic filtering): put it in the Plan/Work prompt and tell the user in one line; never install it unasked.
 
 Tier = how much a mistake costs. Cell = `model·effort / reply cap` (max content lines, status header excluded).
 

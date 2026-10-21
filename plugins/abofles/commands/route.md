@@ -3,7 +3,7 @@ description: "Dry run — print the Abo Fles route lines (model, effort, reply c
 argument-hint: "<task description>"
 ---
 
-Load the abofles skill if it is not already loaded. Run the topic lookup first — one Bash call, `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/topic.py" find "<the ask, 3–8 words>"` — and route from its best match (tier, cells, reviewers, workflow, `💡 suggest` lines), following the skill exactly, but **do not spawn any agent and do not change any file**:
+Load the abofles skill if it is not already loaded. Run the topic lookup first — one Bash call, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/py" "${CLAUDE_PLUGIN_ROOT}/scripts/topic.py" find "<the ask, 3–8 words>"` — and route from its best match (tier, cells, reviewers, workflow, `💡 suggest` lines), following the skill exactly, but **do not spawn any agent and do not change any file**:
 
 $ARGUMENTS
 

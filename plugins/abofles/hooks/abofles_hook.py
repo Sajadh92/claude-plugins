@@ -26,7 +26,6 @@ tokens) in the project's `## abofles overrides` block, else the defaults above.
 
 Reads the hook JSON on stdin. Never raises: a broken hook must not block work.
 """
-import fcntl
 import itertools
 import json
 import os
@@ -36,6 +35,75 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+try:
+    import fcntl  # Linux, macOS
+    msvcrt = None
+except ImportError:  # Windows: no fcntl; lock one byte with msvcrt instead
+    fcntl = None
+    import msvcrt
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if (os.name == "nt" and not sys.flags.utf8_mode and sys.executable and sys.argv and str(sys.argv[0]).endswith(".py")
+        and os.path.dirname(os.path.dirname(os.path.abspath(sys.argv[0]))) == os.path.dirname(_HERE)
+        and os.path.basename(sys.argv[0]) not in ("test_hooks.py", "gen_matrix.py")):
+    # Safety net only: hooks and commands run through scripts/py, which already passes `-X utf8`. Started any other way on
+    # Windows, Python defaults to cp1252 for open(), read_text() and stdout and the memo's emoji and Arabic text crash.
+    # Re-run this plugin's own entry point (hooks/ or scripts/) once in UTF-8 mode; stdin/stdout are inherited.
+    try:
+        sys.exit(subprocess.call([sys.executable, "-X", "utf8", *sys.argv]))
+    except OSError:
+        for _s in (sys.stdin, sys.stdout, sys.stderr):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+def lock_file(fh):
+    """Exclusive lock on an open file: flock on Unix, a one-byte msvcrt lock on Windows (retried up to ~10 s)."""
+    if fcntl:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        return
+    deadline = time.time() + 10
+    while True:
+        try:
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError:
+            if time.time() > deadline:
+                raise
+            time.sleep(0.05)
+
+
+def unlock_file(fh):
+    if fcntl:
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        return
+    fh.seek(0)
+    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def replace_file(tmp, dest):
+    """os.replace, retried for ~1 s: on Windows it raises PermissionError while another process has the target open."""
+    for i in range(20):
+        try:
+            os.replace(tmp, dest)
+            return
+        except PermissionError:
+            if i == 19:
+                try:
+                    os.unlink(tmp)  # do not leave the pid-named temp file behind
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.05)
+
+
+def posix(path):
+    """A path as a string with forward slashes, for substring checks that must work on Windows too."""
+    return str(path).replace("\\", "/")
 
 MODELS = {"haiku", "sonnet", "opus", "fable"}
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
@@ -476,7 +544,13 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 
 def script_cmd(script, *args):
-    return [sys.executable or "python3", str(SCRIPTS_DIR / script), *[str(a) for a in args]]
+    return [sys.executable or "python3", "-X", "utf8", str(SCRIPTS_DIR / script), *[str(a) for a in args]]
+
+
+def shell_cmd(script):
+    """The command the model runs in its Bash tool for a plugin script: through scripts/py, which picks python3, python
+    or `py -3` (Windows often has no python3) and turns on UTF-8 mode. Forward slashes: Git Bash on Windows takes them."""
+    return f'bash "{posix(SCRIPTS_DIR / "py")}" "{posix(SCRIPTS_DIR / script)}"'
 
 
 def guide_item(p, text, fill, resolve=None, recheck=None, unresolve=None, id=""):
@@ -717,8 +791,8 @@ def repo_top(path):
                 target = git.read_text().split("gitdir:", 1)[1].strip()
                 tp = Path(target) if os.path.isabs(target) else cand / target
                 tp = os.path.realpath(tp)
-                if "/.git/worktrees/" in tp:
-                    return tp.split("/.git/worktrees/")[0]
+                if "/.git/worktrees/" in posix(tp):
+                    return str(Path(posix(tp).split("/.git/worktrees/")[0]))
                 return str(cand)
     except Exception:
         pass
@@ -732,7 +806,7 @@ def work_key(st, path):
     if not root or not path:
         return None
     p = os.path.realpath(path)
-    if p == root or p.startswith(root.rstrip("/") + "/"):
+    if p == root or posix(p).startswith(posix(root).rstrip("/") + "/"):
         return root
     return repo_top(p)
 
@@ -827,9 +901,9 @@ def config_read():
 def config_write(d):
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CONFIG_PATH.with_suffix(".tmp")
+        tmp = CONFIG_PATH.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(d, indent=1))
-        os.replace(tmp, CONFIG_PATH)
+        replace_file(tmp, CONFIG_PATH)
         return True
     except Exception:
         return False
@@ -865,9 +939,9 @@ def registry_touch(cwd):
         real = os.path.realpath(cwd or os.getcwd())
         reg[real] = {"name": Path(real).name, "memo": str(memo_path(real)), "updated": time.strftime("%Y-%m-%d %H:%M")}
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = registry_path().with_suffix(".tmp")
+        tmp = registry_path().with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(reg, indent=1))
-        os.replace(tmp, registry_path())
+        replace_file(tmp, registry_path())
     except Exception:
         pass
 
@@ -917,7 +991,7 @@ def git_exclude_memo(cwd):
             git = Path(git.read_text().split("gitdir:", 1)[1].strip())
             if not git.is_absolute():
                 git = Path(cwd) / git
-            git = Path(str(git).split("/worktrees/")[0]) if "/worktrees/" in str(git) else git
+            git = Path(posix(git).rsplit("/worktrees/", 1)[0]) if "/worktrees/" in posix(git) else git
         ex = git / "info" / "exclude"
         if not git.is_dir():
             return
@@ -953,7 +1027,7 @@ class memo_lock:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.fh = open(self.path, "w")
-            fcntl.flock(self.fh, fcntl.LOCK_EX)
+            lock_file(self.fh)
             _MEMO_HELD.add(str(self.path))
         except Exception:
             self.fh = None
@@ -962,7 +1036,7 @@ class memo_lock:
         if self.fh:
             _MEMO_HELD.discard(str(self.path))
             try:
-                fcntl.flock(self.fh, fcntl.LOCK_UN)
+                unlock_file(self.fh)
                 self.fh.close()
             except Exception:
                 pass
@@ -1011,7 +1085,7 @@ def memo_write(cwd, sec, session_id=""):
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(head + body)
-        os.replace(tmp, path)
+        replace_file(tmp, path)
         if new:
             git_exclude_memo(cwd)
         registry_touch(cwd)
@@ -1037,7 +1111,7 @@ def sess_write(cwd, session_id, sec):
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(head + body)
-        os.replace(tmp, path)
+        replace_file(tmp, path)
     except Exception:
         pass
 
@@ -1530,7 +1604,7 @@ def resume_block(cwd, away_min=None, session_id="", guide=None, scope=None, expl
 
 def resume_note(block, why):
     return (f"abofles RESUME ({why}): print the block below **verbatim, first in your reply**, no re-reading; then handle the prompt as usual. "
-            f"Settle an item: `python3 \"{Path(__file__).resolve().parent.parent / 'scripts' / 'memo.py'}\" resolve <n> \"<note>\"`.\n\n{block}")
+            f"Settle an item: `{shell_cmd('memo.py')} resolve <n> \"<note>\"`.\n\n{block}")
 
 
 def decision(data):
@@ -2234,14 +2308,14 @@ class state_lock:
         try:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             self.fh = open(self.path, "w")
-            fcntl.flock(self.fh, fcntl.LOCK_EX)
+            lock_file(self.fh)
         except Exception:
             self.fh = None
         return self
     def __exit__(self, *a):
         if self.fh:
             try:
-                fcntl.flock(self.fh, fcntl.LOCK_UN)
+                unlock_file(self.fh)
                 self.fh.close()
             except Exception:
                 pass
@@ -2379,7 +2453,7 @@ def midturn_receipt(data, st, want_text=False):
 
 def budget_deny(budget, src, no_tier, used):
     return (f"Abo Fles (ابو فليس): this task's agent budget is {budget} ({src}{' — no `abofles: <Topic> / <Side> · T<n>` first line, sized Normal' if no_tier else ''}); {used} already ran or are running. "
-            f"Finish in the main session, or raise it: `/abofles:agents N` (chat `agents N` → `python3 \"{Path(__file__).resolve().parent.parent / 'scripts' / 'agents.py'}\" set N`). "
+            f"Finish in the main session, or raise it: `/abofles:agents N` (chat `agents N` → `{shell_cmd('agents.py')} set N`). "
             "To ask the user which, one AskUserQuestion goes straight through (no Judge) within 10 min.")
 
 
@@ -3041,7 +3115,7 @@ def start(data):
     prune_state()
     if en:
         print(en)
-    print(f'abofles: topic lookup = python3 "{SCRIPTS_DIR / "topic.py"}" find "<the ask, 3-8 words>" — one Bash call per task before the workflow line (3 matches: tier, cells, reviewers, 💡 suggestions); `show <#|name>`, `domains`, `list <CODE>`.')
+    print(f'abofles: topic lookup = {shell_cmd("topic.py")} find "<the ask, 3-8 words>" — one Bash call per task before the workflow line (3 matches: tier, cells, reviewers, 💡 suggestions); `show <#|name>`, `domains`, `list <CODE>`.')
     if inote:
         print(inote)
     if memo_path(root).exists():
@@ -3097,7 +3171,7 @@ def newest_state_path(cwd=None, session=None):
             for root in {os.path.realpath(raw), os.path.realpath(st.get("project") or raw)}:  # the launch root, or the work root the memo moved to
                 if want == root:
                     exact.append((key, sp))
-                elif want.startswith(root.rstrip("/") + "/"):
+                elif posix(want).startswith(posix(root).rstrip("/") + "/"):
                     inside.append((key, sp))  # a command run from a subfolder of the project (after a `cd`) still belongs to that session
         except Exception:
             continue
@@ -3144,7 +3218,7 @@ def guard(data):
         return
     elif tool == "Bash":
         cmd = (data.get("tool_input") or {}).get("command", "")
-        if "scripts/topic.py" in cmd or "/topic.py\"" in cmd:
+        if "scripts/topic.py" in posix(cmd):
             return  # the topic lookup: part of routing, neither a direct read nor a streak breaker
         bare = re.sub(r"'[^']*'|\"[^\"]*\"|\d?>&\d", "", cmd)  # a `>` inside quotes or `2>&1` is not a redirect into a file
         is_read = bool(READ_CMD.match(cmd)) and not WRITE_CMD.search(bare)
@@ -3347,7 +3421,7 @@ def receipt(data):
             elif data.get("stop_hook_active"):
                 st["receipt_owed"] = True  # the one nudge is spent and no receipt came: the task stays open until one is printed
             else:
-                reasons.append(f"abofles: {pending} agent(s) spawned, no receipt{' (still owed from the last turn)' if owed else ''}. Print it now.\n" + instruction.removeprefix("abofles: "))
+                reasons.append(f"abofles: {pending} agent(s) spawned, no receipt{' (still owed from the last turn)' if owed else ''}. Print it now.\n" + (instruction[len("abofles: "):] if instruction.startswith("abofles: ") else instruction))
         elif not pending and st.get("gate") == "task" and not st.get("task_budget"):
             st["gate"], st["task_budget"], st["task_parallel"] = None, None, None  # "Main session only" was for that turn's task
         if live and not unasked and not spent:
@@ -3419,7 +3493,7 @@ def write_rows(path, rows):
     try:
         tmp = path.with_suffix(".tmp")
         tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-        os.replace(tmp, path)
+        replace_file(tmp, path)
     except Exception:
         pass
 

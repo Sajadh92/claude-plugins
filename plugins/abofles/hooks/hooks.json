@@ -9,7 +9,7 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" start"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" start"
           }
         ]
       }
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" guard"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" guard"
           }
         ]
       },
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" qgate"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" qgate"
           }
         ]
       },
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" pre"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" pre"
           }
         ]
       }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" prompt"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" prompt"
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" receipt"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" receipt"
           }
         ]
       }
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" stop"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" stop"
           }
         ]
       }
@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" decision"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" decision"
           }
         ]
       },
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" post"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" post"
           }
         ]
       },
@@ -97,7 +97,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" sendmsg"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" sendmsg"
           }
         ]
       },
@@ -106,7 +106,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" edit"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/py\" --hook \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" edit"
           }
         ]
       }

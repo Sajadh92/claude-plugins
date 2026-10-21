@@ -35,12 +35,13 @@ except Exception:  # pragma: no cover
     fmt_usd = lambda x: f"${x:.2f}"
     PRICE_USD = {}
 try:
-    from abofles_hook import memo_trace, memo_path, state_path, ledger_path, state_lock
+    from abofles_hook import memo_trace, memo_path, state_path, ledger_path, state_lock, replace_file
 except Exception:  # pragma: no cover
     import contextlib
     memo_trace = None
     ledger_path = lambda sid: Path(os.environ.get("ABOFLES_LEDGER_DIR", Path.home() / ".abofles" / "ledgers")) / f"{re.sub(r'[^A-Za-z0-9_-]', '', sid or '') or 'unknown'}.jsonl"
     state_lock = lambda sid: contextlib.nullcontext()
+    replace_file = os.replace
 
 LEDGER_DIR = Path(os.environ.get("ABOFLES_LEDGER_DIR", Path.home() / ".abofles" / "ledgers"))
 PRICE = {"haiku": 1, "sonnet": 20, "opus": 40, "fable": 100}
@@ -177,7 +178,7 @@ def settle(args, sess=None):
         tmp = f.with_name(f"{f.name}.{os.getpid()}.tmp")
         try:
             tmp.write_text(out)
-            os.replace(tmp, f)
+            replace_file(tmp, f)
         except Exception as e:
             print(f"abofles: cannot write {f.name}: {e}")
             try:

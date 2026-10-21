@@ -15,7 +15,7 @@ The memo is kept by the hooks, not by you, in the **project root — the directo
 
 The **resume block** (`📍 **Resume**` · now · left · next · needs you · last 3 receipts · guide — a field with 2+ items is rendered as sub-bullets, so write one `Left` line per item in the memo) is handed to you by the hooks after a `/compact`, at session start when a memo exists, and on the first prompt after the user was away `Break` minutes (default 10). **Print it verbatim, first in your reply, then handle the prompt.** Never rebuild it by re-reading the transcript, the ledger or files — the user already paid for that output once. `/abofles:resume` prints it on demand.
 
-When the user settles an open item in chat, run `python3 "<plugin root>/scripts/memo.py" resolve <n> "<what was decided>" --session "${CLAUDE_SESSION_ID}"` (one cheap call) so it leaves the list; when something is decided in prose without a question, `… memo.py note "<decision>" --session "${CLAUDE_SESSION_ID}"`. Put every owner decision and ATTENTION in the receipt's `open` line — that is how it reaches the list.
+When the user settles an open item in chat, run `bash "<plugin root>/scripts/py" "<plugin root>/scripts/memo.py" resolve <n> "<what was decided>" --session "${CLAUDE_SESSION_ID}"` (one cheap call) so it leaves the list; when something is decided in prose without a question, `… memo.py note "<decision>" --session "${CLAUDE_SESSION_ID}"`. Put every owner decision and ATTENTION in the receipt's `open` line — that is how it reaches the list.
 
 ### Context watch — when to compact
 
@@ -27,7 +27,7 @@ The hooks read the session's context size from the transcript (the token count t
    - **Task open** (edits half applied, a chain running, a verifier not yet back) → do **not** compact now; a compact drops the chain's working state. Finish the current step, print the receipt, run `/abofles:memo`, **then** compact.
 3. Compacting re-arms the marks: after `/compact` the context drops and every mark warns again when passed.
 
-`/abofles:status` shows the current context size and the next mark; `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py" tokens` prints it alone.
+`/abofles:status` shows the current context size and the next mark; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/py" "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" tokens` prints it alone.
 
 The 900K mark is the last one: say so and treat it as "compact before the next task starts, whatever the state".
 

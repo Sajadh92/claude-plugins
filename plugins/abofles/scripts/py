@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# abofles launcher: run a plugin Python file with the first Python 3.8+ found, in UTF-8 mode.
+# macOS/Linux: python3. Windows (Git Bash): python3 is often the Microsoft Store stub (exit 9009), so each
+# candidate is probed once and the winner cached in ~/.abofles/py-path. Hooks and slash commands all go through here.
+# `--hook` first: run (not exec) and always exit 0, so a missing file or an old Python can never block a tool call.
+hook=""
+if [ "${1:-}" = "--hook" ]; then hook=1; shift; fi
+export MSYS2_ARG_CONV_EXCL='*'  # Git Bash: never rewrite arguments that start with `/`
+case "${OSTYPE:-}" in
+  msys*|cygwin*|win32*) probe=1 ;;
+  *) probe="${ABOFLES_PY_PROBE:-}" ;;
+esac
+ok='import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'
+cache="${ABOFLES_PY_CACHE:-$HOME/.abofles/py-path}"
+pick=""
+if [ -n "$probe" ] && [ -f "$cache" ]; then
+  read -r pick < "$cache" 2>/dev/null
+  [ -n "$pick" ] && ! command -v ${pick%% *} >/dev/null 2>&1 && pick=""
+fi
+if [ -z "$pick" ]; then
+  for c in python3 python "py -3"; do
+    command -v ${c%% *} >/dev/null 2>&1 || continue
+    if [ "$c" = "python3" ] && [ -z "$probe" ]; then pick="$c"; break; fi  # Unix: python3 is real, no probe cost
+    if $c -c "$ok" >/dev/null 2>&1; then pick="$c"; break; fi
+  done
+  if [ -n "$pick" ] && [ -n "$probe" ]; then
+    [ -d "${cache%/*}" ] || mkdir -p "${cache%/*}" 2>/dev/null
+    printf '%s\n' "$pick" > "$cache" 2>/dev/null
+  fi
+fi
+if [ -z "$pick" ]; then
+  echo "abofles: Python 3.8+ not found (tried python3, python, py -3); install it from python.org" >&2
+  exit 0
+fi
+if [ -n "$hook" ]; then
+  $pick -X utf8 "$@"
+  exit 0
+fi
+exec $pick -X utf8 "$@"

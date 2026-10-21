@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -187,7 +188,7 @@ def main():
         _rl = subprocess.run([sys.executable, str(LAUNCH), "guard"], input=json.dumps({"session_id": "gmain", "cwd": cwd, "tool_name": "Grep", "tool_input": {}}), capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led))
         check("launcher: run.py guard exits 0 and is silent like the script", _rl.returncode == 0 and _rl.stdout.strip() == "")
         _hj = json.loads((HOOK.parent / "hooks.json").read_text())
-        _cmds = [h["command"] for ev in _hj["hooks"].values() for grp in ev for h in grp["hooks"] if h["type"] == "command" and "python3" in h["command"]]
+        _cmds = [h["command"] for ev in _hj["hooks"].values() for grp in ev for h in grp["hooks"] if h["type"] == "command" and "run.py" in h["command"]]
         check("launcher: every python hook command runs hooks/run.py", _cmds and all("hooks/run.py" in c for c in _cmds))
         check("launcher: SessionStart text asks for the skill once per session, not per task", "once per session" in _hj["hooks"]["SessionStart"][0]["hooks"][0]["command"] and "start of each task" not in _hj["hooks"]["SessionStart"][0]["hooks"][0]["command"])
         # prune: state and ledger files untouched for 60 days go at SessionStart; the registry and fresh files stay
@@ -753,8 +754,8 @@ def main():
         yi = next((i for i in (json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items", []) if i["p"] == "🟡"), {})
         STx = Path(__file__).resolve().parent / "status.py"
         check("guide: an escalate item resolves with a --trace and unresolves through status.py",
-              yi.get("resolve", [])[1:] == [str(STx), "--resolve", "es1abc", "--session", "gu", "--trace", yi.get("resolve", ["", "", "", "", "", "", ""])[-1]] and yi["resolve"][-1].startswith("Read ")
-              and (yi.get("unresolve") or [])[:7] == [sys.executable, str(STx), "--unresolve", "es1abc", "--session", "gu", "--trace"] and yi.get("recheck") is None)
+              yi.get("resolve", [])[1:3] == ["-X", "utf8"] and yi.get("resolve", [])[3:] == [str(STx), "--resolve", "es1abc", "--session", "gu", "--trace", yi.get("resolve", ["", "", "", "", "", "", ""])[-1]] and yi["resolve"][-1].startswith("Read ")
+              and (yi.get("unresolve") or [])[:9] == [sys.executable, "-X", "utf8", str(STx), "--unresolve", "es1abc", "--session", "gu", "--trace"] and yi.get("recheck") is None)
         pin("gu")
         genv = dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)
         rr = _sp.run(yi["resolve"], cwd=cwd, capture_output=True, text=True, env=genv)
@@ -785,8 +786,8 @@ def main():
         od = ((json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items") or [{}])[0]
         check("guide: an owner decision item asks the user after judging, and resolves through memo.py",
               od.get("p") == "🟠" and od.get("fill", "").startswith("abofles: owner decision 1 is open: ") and od["fill"].endswith("Judge it first, then ask me with AskUserQuestion.")
-              and od.get("resolve") == [sys.executable, str(Path(__file__).resolve().parent / "memo.py"), "resolve", "1", "settled from the guide band", "--trace", "--session", "gu"]
-              and od.get("unresolve") == [sys.executable, str(Path(__file__).resolve().parent / "memo.py"), "reopen", "1", "--trace", "--session", "gu"] and od.get("recheck") is None)
+              and od.get("resolve") == [sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "memo.py"), "resolve", "1", "settled from the guide band", "--trace", "--session", "gu"]
+              and od.get("unresolve") == [sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "memo.py"), "reopen", "1", "--trace", "--session", "gu"] and od.get("recheck") is None)
         rout = _sp.run(od["resolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)).stdout
         check("guide: running the owner decision's resolve command ticks it in the memo", rout.startswith("resolved:") and "1. [x]" in mf.read_text())
         check("trace: memo resolve --trace journals the owner decision", any("resolved by hand: owner decision 1: " in l and "(s:" not in l.split("by hand:")[1] for l in sf("gu").read_text().splitlines()))
@@ -1749,8 +1750,99 @@ def main():
         out = run("guard", {"session_id": "tp", "cwd": cwd, "tool_name": "Bash", "tool_input": {"command": f'python3 "{sdir / "topic.py"}" find "replica lag"'}}, led)
         check("guard: the topic lookup is silent and neither counts nor breaks the streak", out is None and json.loads(Path(state, "tp.json").read_text()).get("direct_reads") == 3 and "direct reads in a row" in ctx(g()))
         st_out = run("start", {"session_id": "tp2", "cwd": cwd}, led)
-        check("start: SessionStart names the topic lookup command", "abofles: topic lookup = python3" in (st_out or "") and "topic.py" in (st_out or ""))
+        check("start: SessionStart names the topic lookup command", "abofles: topic lookup = bash" in (st_out or "") and "scripts/py" in (st_out or "") and "topic.py" in (st_out or ""))
         check("skill: Step 2 tells the model to look the topic up, not read a list", "scripts/topic.py" in (sdir.parent / "skills/abofles/SKILL.md").read_text() and "100 topics" not in (sdir.parent / "skills/abofles/SKILL.md").read_text())
+
+    # ---- Windows: no fcntl. A stub msvcrt (backed by flock) stands in; the hooks must load, lock and answer as on Unix.
+    with tempfile.TemporaryDirectory() as led, tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as shim:
+        Path(shim, "sitecustomize.py").write_text(
+            "import sys, fcntl as _f\n"
+            "class _M:\n"
+            "    LK_NBLCK = 2; LK_UNLCK = 0; LK_LOCK = 1\n"
+            "    calls = []\n"
+            "    @staticmethod\n"
+            "    def locking(fd, mode, n):\n"
+            "        _M.calls.append(mode)\n"
+            "        _f.lockf(fd, _f.LOCK_UN if mode == 0 else _f.LOCK_EX | _f.LOCK_NB, n, 0)\n"
+            "sys.modules['msvcrt'] = _M\n"
+            "sys.modules['fcntl'] = None\n"
+            "import atexit, os\n"
+            "atexit.register(lambda: open(os.environ['WIN_LOG'], 'a').write(','.join(map(str, _M.calls)) + '\\n'))\n")
+        wlog = Path(shim, "calls.log")
+        wenv = dict(os.environ, PYTHONPATH=shim, WIN_LOG=str(wlog), ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state, ABOFLES_USER_CLAUDE_MD=str(Path(state, "none.md")))
+        wrun = lambda mode, payload: subprocess.run([sys.executable, str(HOOK.parent / "run.py"), mode], input=json.dumps(payload), capture_output=True, text=True, env=wenv)
+        r = wrun("start", {"session_id": "win", "cwd": cwd, "source": "startup"})
+        check("windows: hooks load without fcntl (SessionStart runs, prints the lookup line)", r.returncode == 0 and "topic lookup" in r.stdout and "Traceback" not in r.stderr)
+        check("windows: state written under the msvcrt lock", Path(state, "win.json").exists() and "2" in wlog.read_text() and "0" in wlog.read_text())
+        rr = [wrun("guard", {"session_id": "win", "cwd": cwd, "tool_name": "Grep", "tool_input": {}}) for _ in range(4)]
+        check("windows: guard counts reads and warns on the 4th", all(x.returncode == 0 for x in rr) and "direct reads in a row" in rr[3].stdout)
+        r = wrun("pre", dict(agent("haiku", None, cwd=cwd), session_id="win"))
+        check("windows: pre still blocks a spawn without effort", "effort=missing" in r.stdout)
+        Path(cwd, ".claude").mkdir(exist_ok=True)
+        r = subprocess.run([sys.executable, str(sdir / "memo.py"), "now", "--session", "win"], input="Task      Arabic ✓ عربي 🧔\nNext      test\n", capture_output=True, text=True, env=wenv, cwd=cwd)
+        check("windows: memo.py writes a Now section with emoji and Arabic", r.returncode == 0 and "عربي" in Path(cwd, ".claude", "abofles-memo.d", "win.md").read_text(encoding="utf-8"))
+        hj = json.loads((HOOK.parent / "hooks.json").read_text())
+        cmds = [h["command"] for ev in hj["hooks"].values() for grp in ev for h in grp["hooks"] if "run.py" in h["command"]]
+        check("windows: every hook command goes through scripts/py (python3 -> python -> py -3)", cmds and all('bash "${CLAUDE_PLUGIN_ROOT}/scripts/py"' in c for c in cmds))
+        check("windows: no Unix-only import left at module top", "\nimport fcntl\n" not in HOOK.read_text())
+        import importlib.util as _iuw
+        _hw = _iuw.spec_from_file_location("abofles_hook_win", str(HOOK)); HW = _iuw.module_from_spec(_hw); _hw.loader.exec_module(HW)
+        check("windows: posix() normalises backslash paths for the worktree checks", HW.posix("C:\\repo\\.git\\worktrees\\wt") == "C:/repo/.git/worktrees/wt")
+
+    # ---- launcher scripts/py: python3 -> python -> py -3, UTF-8 mode; hooks, commands and printed commands all use it
+    with tempfile.TemporaryDirectory() as led, tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as fbin:
+        sdir = Path(__file__).resolve().parent
+        PY = sdir / "py"
+        base = dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state, ABOFLES_USER_CLAUDE_MD=str(Path(state, "none.md")))
+        r = subprocess.run(["bash", str(PY), "-c", "import sys; print(sys.flags.utf8_mode)"], capture_output=True, text=True, env=base)
+        check("launcher: scripts/py runs Python in UTF-8 mode", r.returncode == 0 and r.stdout.strip() == "1")
+        # Windows-like PATH: python3 is the Store stub (exit 9009), python is real
+        Path(fbin, "python3").write_text("#!/bin/sh\nexit 9009\n"); os.chmod(Path(fbin, "python3"), 0o755)
+        os.symlink(sys.executable, Path(fbin, "python"))
+        for tool in ("bash", "sh", "env", "dirname", "basename"):
+            w = shutil.which(tool)
+            if w and not Path(fbin, tool).exists():
+                os.symlink(w, Path(fbin, tool))
+        wenv = dict(base, PATH=fbin, ABOFLES_PY_PROBE="1")
+        r = subprocess.run(["bash", str(PY), "-c", "import sys; print('ok', sys.flags.utf8_mode)"], capture_output=True, text=True, env=wenv)
+        check("launcher: a python3 stub (exit 9009) is skipped and `python` runs", r.returncode == 0 and r.stdout.strip() == "ok 1")
+        Path(fbin, "python").unlink()
+        r = subprocess.run(["bash", str(PY), "-c", "print(1)"], capture_output=True, text=True, env=wenv)
+        check("launcher: no Python at all -> one clear stderr line, exit 0 (hook never breaks the session)", r.returncode == 0 and "Python 3.8+ not found" in r.stderr and r.stdout == "")
+        hj = json.loads((HOOK.parent / "hooks.json").read_text())
+        cmds = [h["command"] for ev in hj["hooks"].values() for grp in ev for h in grp["hooks"] if "run.py" in h["command"]]
+        check("launcher: every hook command runs bash scripts/py --hook hooks/run.py <mode>, no `||` (no double run)", len(cmds) == 11 and all(c.startswith('bash "${CLAUDE_PLUGIN_ROOT}/scripts/py" --hook "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" ') and "||" not in c for c in cmds))
+        r = subprocess.run(["bash", str(PY), "--hook", str(Path(state, "missing.py"))], capture_output=True, text=True, env=base)
+        check("launcher: --hook always exits 0, even when Python fails (exit 2 would block the tool call)", r.returncode == 0)
+        r = subprocess.run(["bash", str(PY), str(Path(state, "missing.py"))], capture_output=True, text=True, env=base)
+        check("launcher: without --hook the script's own exit code passes through (commands see failures)", r.returncode == 2)
+        check("launcher: scripts/py has LF line endings and .gitattributes keeps them on Windows checkouts", b"\r" not in PY.read_bytes() and "plugins/abofles/scripts/py text eol=lf" in (sdir.parents[2] / ".gitattributes").read_text())
+        cache = Path(state, "py-path")
+        Path(fbin, "python").symlink_to(sys.executable)
+        r1 = subprocess.run(["bash", str(PY), "-c", "print(2)"], capture_output=True, text=True, env=dict(wenv, ABOFLES_PY_CACHE=str(cache)))
+        check("launcher: the probed interpreter is cached for the next call", r1.stdout.strip() == "2" and cache.read_text().strip() == "python")
+        Path(fbin, "python").unlink()
+        r2 = subprocess.run(["bash", str(PY), "-c", "print(3)"], capture_output=True, text=True, env=dict(wenv, ABOFLES_PY_CACHE=str(cache)))
+        check("launcher: a cached interpreter that disappeared is re-probed (no stale cache)", r2.returncode == 0 and "not found" in r2.stderr)
+        src = HOOK.read_text()
+        check("windows: the UTF-8 relaunch skips test_hooks.py and gen_matrix.py", '"test_hooks.py", "gen_matrix.py"' in src)
+        r = subprocess.run(["bash", "-c", " ".join(cmds[0].replace("${CLAUDE_PLUGIN_ROOT}", str(sdir.parent)).split()[:4]) + " start"], input=json.dumps({"session_id": "lz", "cwd": cwd, "source": "startup"}), capture_output=True, text=True, env=base)
+        check("launcher: the real hooks.json command line runs SessionStart", r.returncode == 0 and "topic lookup = bash" in r.stdout and "scripts/py" in r.stdout)
+        cm = "".join(p.read_text() for p in (sdir.parent / "commands").glob("*.md"))
+        docs = "".join(p.read_text() for p in [sdir.parent / "skills/abofles/SKILL.md", *(sdir.parent / "skills/abofles/references").glob("*.md")])
+        check("launcher: no slash command or skill text tells the model to run python3 directly", "python3 \"${CLAUDE_PLUGIN_ROOT}" not in cm and "Bash(python3" not in cm and 'python3 "<plugin' not in docs and "Bash(bash *)" in cm)
+        import importlib.util as _iul
+        _hl = _iul.spec_from_file_location("abofles_hook_l", str(HOOK)); HL = _iul.module_from_spec(_hl); _hl.loader.exec_module(HL)
+        check("launcher: printed commands use scripts/py with forward slashes", HL.shell_cmd("memo.py").startswith('bash "') and "/scripts/py\" \"" in HL.shell_cmd("memo.py") and "\\" not in HL.shell_cmd("memo.py"))
+        # Windows path shapes (ntpath-style strings) in the prefix checks
+        st = {"root": "C:\\work\\proj"}
+        _rp = HL.os.path.realpath
+        HL.os.path.realpath = lambda x: x
+        try:
+            check("windows: an edit under the launch root (backslash paths) counts for the root", HL.work_key(st, "C:\\work\\proj\\src\\a.cs") == "C:\\work\\proj")
+        finally:
+            HL.os.path.realpath = _rp
+        check("windows: replace_file retries a PermissionError then succeeds", (lambda: (lambda calls: (setattr(HL.os, "replace", (lambda o: (lambda a, b: (calls.append(1), (_ for _ in ()).throw(PermissionError()) if len(calls) < 3 else o(a, b))))(HL.os.replace)), Path(state, "t.tmp").write_text("x"), HL.replace_file(Path(state, "t.tmp"), Path(state, "t.out")), Path(state, "t.out").exists() and len(calls) == 3)[-1])([]))())
 
     print(f"\n{'ALL PASS' if not fails else f'{fails} FAILED'}")
     sys.exit(1 if fails else 0)

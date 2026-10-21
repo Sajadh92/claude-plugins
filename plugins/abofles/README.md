@@ -28,7 +28,7 @@ A Claude Code plugin that picks the right model and effort for every subagent, s
 
 Matrix and domains: [skills/abofles/references/matrix.md](skills/abofles/references/matrix.md); every topic: [skills/abofles/references/topic-index.md](skills/abofles/references/topic-index.md).
 
-Requires `python3` on PATH for the hooks and the bill. Without it the hooks exit silently and the skill still routes — nothing is enforced or logged.
+Requires Python 3.8+ on PATH as `python3`, `python` or the `py` launcher (macOS, Linux and Windows with Git Bash, which Claude Code uses on Windows). `scripts/py` picks the first that works and runs it in UTF-8 mode. Without Python the hooks exit silently and the skill still routes — nothing is enforced or logged. On Windows the hooks lock files with `msvcrt` instead of `fcntl`.
 
 ## Layout
 
