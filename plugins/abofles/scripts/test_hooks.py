@@ -69,7 +69,8 @@ def main():
         check("pre: missing model blocked", "model=missing" in reason(run("pre", agent(effort="low"), led)))
         check("pre: bad effort blocked", "effort=ultra" in reason(run("pre", agent("opus", "ultra"), led)))
         check("pre: fable on reader blocked", "fable is only for" in reason(run("pre", agent("fable", "medium"), led)))
-        check("pre: fable on analyst allowed", run("pre", agent("fable", "medium", "abofles:abofles-analyst"), led) is None)
+        _fa = run("pre", agent("fable", "medium", "abofles:abofles-analyst"), led)
+        check("pre: fable on analyst allowed (an advisory cell note at most)", _fa is None or (_fa.get("hookSpecificOutput", {}).get("permissionDecision") == "allow" and "× the cell" in ctx(_fa)))
         check("pre: good call allowed", run("pre", agent("haiku", "low"), led) is None)
         check("pre: skip bypass", run("pre", agent(prompt="abofles:skip x", stype="Explore"), led) is None)
         check("pre: non-Agent tool ignored", run("pre", {"tool_name": "Bash", "tool_input": {}}, led) is None)
@@ -398,7 +399,8 @@ def main():
         # session start after compact -> resume block
         out = run("start", {"session_id": "mm", "cwd": cwd, "source": "compact"}, led)
         check("memo: SessionStart(compact) prints the resume block", isinstance(out, str) and "RESUME (context was just compacted)" in out and "📍 **Resume**" in out)
-        check("memo: SessionStart with no memo -> nothing", run("start", {"session_id": "mm2", "cwd": state, "source": "startup"}, led) is None)
+        _nm = run("start", {"session_id": "mm2", "cwd": state, "source": "startup"}, led) or ""
+        check("memo: SessionStart with no memo -> no resume block (only the topic-lookup line)", "📍" not in _nm and "RESUME" not in _nm and all(l.startswith("abofles: topic lookup") for l in _nm.splitlines() if l.strip()))
         # agent gate: ask once, parse the answer, enforce the budget and the parallel cap
         run("start", {"session_id": "ag", "cwd": cwd, "transcript_path": str(tr)}, led)  # main model in tr is fable -> orchestrator
         out = run("pre", dict(agent("haiku", "low", cwd=cwd), session_id="ag"), led)
@@ -1487,7 +1489,7 @@ def main():
         Path(P, "CLAUDE.md").write_text("## abofles overrides\n- Review gate = off\n")
         sp("rv2", "Work", "abofles:abofles-worker")
         check("review gate: off -> a 🔴 change closes silently, no item", stop_("rv2", RCPT) is None and not rst("rv2").get("review_missing"))
-        Path(P, "CLAUDE.md").write_text("## abofles overrides\n- Reviewers: B = finance\n")
+        Path(P, "CLAUDE.md").write_text("## abofles overrides\n- Reviewers: FIN = finance\n")
         sp("rv2", "Work", "abofles:abofles-worker")
         out = stop_("rv2", RCPT)
         check("review gate: Reviewers: <group> = finance narrows the requirement", "Finance" in (out or {}).get("reason", "") and "Security" not in (out or {}).get("reason", ""))
@@ -1666,6 +1668,89 @@ def main():
             check(f"session: {name} ignores a trailing empty --session", r.returncode == 0 and "usage" not in r.stdout.lower())
         check("session: status --resolve with an empty id plus a trailing empty --session still exits 2", sc_("status.py", "--resolve", "", "--session", "").returncode == 2)
         check("session: a non-trailing empty --session value still exits 2", sc_("status.py", "--resolve", "abc", "--session", "", "--trace").returncode == 2)
+
+    # ---- topics: 27 domains, 1,100+ topics looked up by scripts/topic.py, four new reviewers, suggestions
+    with tempfile.TemporaryDirectory() as led, tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as state:
+        os.environ["ABOFLES_STATE_DIR"] = state
+        os.environ["ABOFLES_TEST_CWD"] = cwd
+        os.environ["ABOFLES_USER_CLAUDE_MD"] = str(Path(state, "no-user-claude.md"))
+        sdir = Path(__file__).resolve().parent
+        sys.path.insert(0, str(sdir))
+        import topics_data as TD
+        import importlib.util as _iut
+        _hst = _iut.spec_from_file_location("abofles_hook_tp", str(HOOK)); HT = _iut.module_from_spec(_hst); _hst.loader.exec_module(HT)
+        wf = HT.workflow_table()
+        names = [l.split("|")[0].strip() for _, _, _, _, areas in TD.DOMAINS for _, rows in areas for l in rows]
+        check("topics: 27 domains and 1,000+ topics", len(TD.DOMAINS) == 27 and len(names) >= 1000 and len(wf.get("topics", {})) == len(names))
+        check("topics: names unique", len(set(names)) == len(names))
+        legacy = ["Financial & Amount Calculations", "Codebase Exploration & Onboarding", "Notifications & Messaging", "Data Privacy, PII & Compliance", "Audit Logging & Traceability", "Unit Test", "Payments & Gateway Integration", "Clean Code (naming, structure, readability)", "Work on Document (README, guides)", "Check MVP vs Advance", "Architecture, Design Pattern & Stack Used"]
+        check("topics: the legacy names used by hook, tests and docs are kept", all(n in wf["topics"] for n in legacy))
+        check("topics: every topic has 3+ signals and a valid tier", all(len([x for x in (t.get("signals") or "").split(",") if x.strip()]) >= 3 and t.get("tier") in (1, 2, 3, 4) for t in wf["topics"].values()))
+        rk = set(wf["reviewers"])
+        check("topics: 11 reviewers and every domain/topic reviewer key is one of them", len(rk) == 11 and {"dba", "ops", "perf", "data"} <= rk
+              and all(k in rk for g in wf["groups"].values() for t in ("3", "4") for k in g["reviewers"][t]) and all(k in rk for t in wf["topics"].values() for tt in ("3", "4") for k in t["reviewers"][tt]))
+        check("topics: an agent file exists for every reviewer", all((sdir.parent / "agents" / f"{wf['reviewers'][k]['agent']}.md").exists() for k in rk))
+        check("topics: DBA reviews databases, Ops the cloud, Perf the cache, Data the warehouse",
+              wf["groups"]["DB"]["reviewers"]["3"] == ["dba"] and wf["groups"]["AWS"]["reviewers"]["3"] == ["ops"] and wf["groups"]["MSG"]["reviewers"]["3"] == ["perf"] and wf["groups"]["DATA"]["reviewers"]["3"] == ["data"])
+        check("topics: PII topics still add Compliance; the legacy T4 money topic keeps its Fable Analyse", "compliance" in wf["topics"]["Data Privacy, PII & Compliance"]["reviewers"]["4"] and wf["topics"]["Financial & Amount Calculations"].get("ov", {}).get("Analyse") == "fable·medium")
+        check("topics: workflow.json carries tiers, caps and suggestions", wf["tiers"]["4"]["Plan"] == "opus·xhigh" and wf["caps"]["1"]["Read"] == 20 and "dynamicwhere" in wf.get("suggestions", {}) and "dynamicwhere" in wf["topics"]["Dynamic Filtering, Sorting & Paging from Client Input"].get("suggest", []))
+        check("topics: every suggestion names existing topics", all(t in wf["topics"] for sg in TD.SUGGESTIONS for t in sg["topics"]))
+        # hook lookup
+        m = HT.topic_matches("postgres read replica lag", wf, 3)
+        check("lookup: replica lag ask -> a Replication topic first", m and "Replica" in m[0][1])
+        m = HT.topic_matches("where is the discount applied", wf, 3)
+        check("lookup: a where-is ask -> Codebase Exploration first (T1)", m and m[0][1] == "Codebase Exploration & Onboarding")
+        check("lookup: cloudflare workers -> the Cloudflare Workers topic", "Cloudflare Workers" in HT.topic_matches("cloudflare workers kv", wf, 1)[0][1])
+        check("lookup: otp expiry -> an OTP topic in SEC", (lambda r: r and "OTP" in r[0][1] and r[0][2]["group"] == "SEC")(HT.topic_matches("otp code expiry", wf, 1)))
+        check("lookup: gibberish -> no match", HT.topic_matches("zzqx vvbbnn", wf, 3) == [])
+        check("lookup: cells = tier base unless the topic overrides", HT.topic_cells(wf["topics"]["Unit Test"], 2, wf)["Work"] == ("sonnet·medium", 20, "base") and HT.topic_cells(wf["topics"]["Financial & Amount Calculations"], 4, wf)["Analyse"] == ("fable·medium", 50, "topic"))
+        # topic.py CLI
+        tp = lambda *a, **k: subprocess.run([sys.executable, str(sdir / "topic.py"), *a], capture_output=True, text=True, cwd=k.get("cwd", cwd))
+        r = tp("find", "postgres read replica lag")
+        check("topic.py: find prints matches with tier, cells, reviewers and workflow", r.returncode == 0 and "🔎 topic lookup" in r.stdout and "Replica" in r.stdout and "reviewers T3 DBA" in r.stdout and "Read " in r.stdout and "change →" in r.stdout and len(r.stdout.splitlines()) <= 8)
+        r = tp("find", "add dynamic filter grid to orders api c#")
+        check("topic.py: a C# dynamic-filter ask suggests DynamicWhere.ex", "💡 suggest · DynamicWhere.ex" in r.stdout and "dotnet add package DynamicWhere.ex" in r.stdout)
+        r = tp("find", "add dynamic filter grid to orders api")
+        check("topic.py: no .NET in the ask or the tree -> no suggestion", "💡" not in r.stdout)
+        Path(cwd, "App.csproj").write_text("<Project/>")
+        r = tp("find", "add dynamic filter grid to orders api")
+        check("topic.py: a .csproj in the tree -> stack dotnet and the suggestion", "stack dotnet" in r.stdout and "💡 suggest · DynamicWhere.ex" in r.stdout)
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Topic: Unit Test = T4\n- Unit Test / Work = haiku·low\n- Reviewers: TEST = qa\n")
+        r = tp("show", "Unit Test")
+        check("topic.py: show applies the project's tier, cell and reviewer overrides and marks them", "🔴 Critical (T4) · Project Override" in r.stdout and "Work haiku·low" in r.stdout and "Project Override" in r.stdout and "T3 QA" in r.stdout and "header: abofles: Unit Test / <Side> · T4" in r.stdout)
+        Path(cwd, "CLAUDE.md").unlink()
+        r = tp("show", "#1")
+        check("topic.py: show by number", r.returncode == 0 and "#1 " in r.stdout and "signals:" in r.stdout)
+        r = tp("domains")
+        check("topic.py: domains lists 27 rows", r.returncode == 0 and len([l for l in r.stdout.splitlines() if l.startswith("| ") and not l.startswith("| Code")]) == 27)
+        r = tp("list", "DB")
+        check("topic.py: list DB prints its areas and topics", r.returncode == 0 and "PostgreSQL" in r.stdout and "Replication & Availability:" in r.stdout)
+        check("topic.py: list of an unknown code exits 1", tp("list", "NOPE").returncode == 1)
+        check("topic.py: no-match find says so and exits 0", (lambda r: r.returncode == 0 and "no match" in r.stdout)(tp("find", "zzqx vvbbnn")))
+        # hook notes in pre(): header tags, unknown topic, over-cell, escalation, guard neutrality
+        check("parse_header: the new reviewer tags parse", HT.parse_header("abofles: PostgreSQL / DBA · T3")[1] == "DBA" and HT.parse_header("abofles: X / Ops · T4")[1] == "Ops" and HT.parse_header("abofles: X / Perf · T3")[1] == "Perf" and HT.parse_header("abofles: X / Data · T3")[1] == "Data")
+        run("start", {"session_id": "tp", "cwd": cwd}, led)
+        json.dump(dict(json.loads(Path(state, "tp.json").read_text()), gate="auto"), open(Path(state, "tp.json"), "w"))
+        out = run("pre", dict(agent("haiku", "low", prompt="abofles: Postgres Replica Thing / Read · T3\nq\nLine cap: 40", cwd=cwd), session_id="tp"), led)
+        check("pre: a header topic not in the index -> advisory note with the nearest names", "not in the index — nearest:" in ctx(out) and "Replica" in ctx(out) and reason(out) and (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "allow")
+        json.dump(dict(json.loads(Path(state, "tp.json").read_text()), inflight=0), open(Path(state, "tp.json"), "w"))
+        out = run("pre", dict(agent("opus", "high", prompt="abofles: Codebase Exploration & Onboarding / Read · T1\nq\nLine cap: 40", cwd=cwd), session_id="tp"), led)
+        check("pre: first spawn above the cell's model -> '× the cell' note, still allowed", "× the cell" in ctx(out) and "haiku·low" in ctx(out) and (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "allow")
+        json.dump(dict(json.loads(Path(state, "tp.json").read_text()), inflight=0), open(Path(state, "tp.json"), "w"))
+        out = run("pre", dict(agent("haiku", "low", prompt="abofles: Codebase Exploration & Onboarding / Read · T1\nq\nLine cap: 40", cwd=cwd), session_id="tp"), led)
+        check("pre: a spawn at the cell -> no cell note", "× the cell" not in ctx(out))
+        run("post", dict(agent("haiku", "low", prompt="abofles: Unit Test / Analyse · T2\nq\nLine cap: 20", resp="STATUS: done\nCONFIDENCE: low\nFINDINGS:\n- x\nRECOMMENDATION: y", cwd=cwd), session_id="tp"), led)
+        json.dump(dict(json.loads(Path(state, "tp.json").read_text()), inflight=0), open(Path(state, "tp.json"), "w"))
+        out = run("pre", dict(agent("opus", "medium", prompt="abofles: Unit Test / Analyse · T2\nq\nLine cap: 20", cwd=cwd), session_id="tp"), led)
+        check("pre: a re-run of the same topic and side (escalation) -> no cell note", "× the cell" not in ctx(out))
+        g = lambda: run("guard", {"session_id": "tp", "cwd": cwd, "tool_name": "Grep", "tool_input": {}}, led)
+        json.dump(dict(json.loads(Path(state, "tp.json").read_text()), direct_reads=0, guard_warned_at=0), open(Path(state, "tp.json"), "w"))
+        g(); g(); g()
+        out = run("guard", {"session_id": "tp", "cwd": cwd, "tool_name": "Bash", "tool_input": {"command": f'python3 "{sdir / "topic.py"}" find "replica lag"'}}, led)
+        check("guard: the topic lookup is silent and neither counts nor breaks the streak", out is None and json.loads(Path(state, "tp.json").read_text()).get("direct_reads") == 3 and "direct reads in a row" in ctx(g()))
+        st_out = run("start", {"session_id": "tp2", "cwd": cwd}, led)
+        check("start: SessionStart names the topic lookup command", "abofles: topic lookup = python3" in (st_out or "") and "topic.py" in (st_out or ""))
+        check("skill: Step 2 tells the model to look the topic up, not read a list", "scripts/topic.py" in (sdir.parent / "skills/abofles/SKILL.md").read_text() and "100 topics" not in (sdir.parent / "skills/abofles/SKILL.md").read_text())
 
     print(f"\n{'ALL PASS' if not fails else f'{fails} FAILED'}")
     sys.exit(1 if fails else 0)

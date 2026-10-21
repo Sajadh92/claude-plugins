@@ -22,7 +22,7 @@ Two inputs pick the workflow: the **topic** gives the tier, the **intent** (what
 | 🟠 Sensitive (T3) | Read → Analyse → Plan → Work → Verify → Review |
 | 🔴 Critical (T4) | Read → Analyse → Plan → Work → Verify → Review (every reviewer required) |
 
-`Review` = the specialist reviewers of the topic's group at that tier (table below), spawned **in parallel after Verify passes**, each with the tier's Verify cell (model · effort · cap) unless `- Review: <Name> / T<tier> = model·effort` overrides it. A reviewer FAIL → a Work spawn fixes it → re-run **that reviewer only**. 🟢/🟡: the generic verifier alone.
+`Review` = the specialist reviewers of the topic's domain at that tier (table below; `scripts/topic.py find` prints them per topic), spawned **in parallel after Verify passes**, each with the tier's Verify cell (model · effort · cap) unless `- Review: <Name> / T<tier> = model·effort` overrides it. A reviewer FAIL → a Work spawn fixes it → re-run **that reviewer only**. 🟢/🟡: the generic verifier alone.
 
 **Review gate** (hook, at the receipt): a 🔴 change closed with a required reviewer missing is refused once, naming the missing reviewers; a 🟠 change gets a 🟠 guide item instead. A reviewer you skip on purpose is named in the receipt's `workflow` line — `Security skipped: <reason>` — and the gate lets it pass. `- Review gate = auto | on | warn | off` (auto = this; on = refuse on T3 too; warn = never refuse; off = silent).
 
@@ -37,32 +37,50 @@ Two inputs pick the workflow: the **topic** gives the tier, the **intent** (what
 | 🎯 QA | `QA` | `abofles:abofles-qa` | acceptance against the ticket, user flows end to end, regressions, error paths | read + run |
 | 🎨 UIUX | `UIUX` | `abofles:abofles-uiux` | accessibility, RTL, responsive layout, design tokens, copy; Better Design and UX Pilot connectors when connected | all tools (connectors) |
 | 🧹 Clean | `Clean` | `abofles:abofles-cleancoder` | naming, duplication, dead code, structure — no behaviour change | read-only |
+| 🗄️ DBA | `DBA` | `abofles:abofles-dba` | migration safety and reversibility, locks and long transactions, indexes and query plans, constraints, replicas and backups | read + run read-only SQL |
+| ⚙️ Ops | `Ops` | `abofles:abofles-ops` | pipeline and deploy safety, IaC plan and drift, rollback path, secrets exposure, server and network config, blast radius | read-only |
+| ⚡ Perf | `Perf` | `abofles:abofles-perf` | hot paths and complexity, N+1 and round-trips, allocations, caching, benchmark or load evidence before and after | read + run benchmarks |
+| 📊 Data | `Data` | `abofles:abofles-data` | pipeline idempotency and backfills, metric definitions, aggregation correctness, double counting, freshness, data contracts | read + run read-only queries |
 
 Route line of a reviewer: `<emoji> `<Tag>` → **<Topic>** · <Model> · <Effort> · Cap <N> · <Tier>` (the Verify cell). Prompt header: `abofles: <Topic> / <Tag> · T<tier>`. Reply format: the verifier's (STATUS, CONFIDENCE, VERDICT, EVIDENCE, ISSUES, NOTE).
 
-## Reviewers per group
+## Reviewers per domain
 
-| Group | 🟠 T3 | 🔴 T4 |
+| Domain | 🟠 T3 | 🔴 T4 |
 |---|---|---|
-| A. Security & Trust | Security | Security, Tester |
-| B. Money & Finance | Finance | Finance, Security, Tester |
-| C. Business Logic & Workflows | QA | QA, Tester |
-| D. Quality & Testing | Tester | Tester, QA |
-| E. Debugging & Incidents | Tester | Tester, QA |
-| F. Code Health | Clean | Clean, Tester |
-| G. Architecture & Design | — | Security |
-| H. Data & Storage | — | Security, Tester |
-| I. Integrations & Async | QA | QA, Security |
-| J. Dependencies & DevOps | Security | Security |
-| K. Frontend & UX | UIUX | UIUX, QA |
-| L. Docs & Content | — | — |
-| M. Product & Scope | QA | QA |
+| `SEC` Security & Identity | Security | Security, Tester |
+| `FIN` Money & Finance | Finance | Finance, Security, Tester |
+| `BIZ` Business Logic & Rules | QA | QA, Tester |
+| `DB` Data & Databases | DBA | DBA, Tester, Security |
+| `MSG` Search, Cache & Messaging | Perf | Perf, Tester, Security |
+| `API` Backend & APIs | QA | QA, Security |
+| `WEB` Frontend & Web | UIUX | UIUX, QA |
+| `UX` UI & UX Design | UIUX | UIUX, QA |
+| `MOB` Mobile & Desktop | UIUX | UIUX, QA |
+| `TEST` Quality & Testing | Tester | Tester, QA |
+| `QA` QA & Acceptance | QA | QA, Tester |
+| `PERF` Performance & Benchmarks | Perf | Perf, Tester |
+| `DBG` Debugging & Incidents | Tester | Tester, QA |
+| `CODE` Code Health & Patterns | Clean | Clean, Tester |
+| `ARCH` Architecture & Design | — | Security |
+| `AWS` Cloud: AWS | Ops | Ops, Security |
+| `AZG` Cloud: Azure & GCP | Ops | Ops, Security |
+| `EDGE` Edge, CDN & Networking | Ops | Ops, Security |
+| `SRV` Servers, Hosting & OS | Ops | Ops, Security |
+| `OPS` DevOps, CI/CD & Release | Ops | Ops, Security, Tester |
+| `OBS` Observability & Logging | Ops | Ops, Security |
+| `DATA` Data Engineering & Analytics | Data | Data, QA |
+| `AI` AI, ML & LLM | QA | QA, Security |
+| `INT` Integrations & Third Parties | QA | QA, Security |
+| `DOCS` Docs, Content & Knowledge | — | — |
+| `PROD` Product, Project & Process | QA | QA |
+| `LANG` Languages, Runtimes & Frameworks | Tester | Tester, Security |
 
-Topics that always add a reviewer (T3 and T4): **Data Privacy, PII & Compliance** → Compliance; **Audit Logging & Traceability** → Compliance.
+Topics that always add a reviewer (T3 and T4): **Data Privacy, PII & Compliance** → Compliance; **Audit Logging & Traceability** → Compliance; **GDPR Rights (Access, Erasure, Portability)** → Compliance; **Consent & Cookie Compliance** → Compliance; **Data Retention & Deletion Policies** → Compliance; **PII Masking, Anonymization & Pseudonymization** → Compliance; **PCI DSS & Card Data Handling** → Compliance, Finance; **KYC, AML & Identity Verification** → Compliance; **Regulatory Reporting & Legal Text** → Compliance; **Audit of Business Changes & History** → Compliance; **Checkout & Payment UX** → Finance; **WCAG Compliance & Accessibility Audit** → Compliance; **Mobile Payments (Apple Pay, Google Pay, IAP)** → Finance; **Synthetic & Anonymized Production-like Data** → Compliance; **Data Validation QA (reports, numbers, totals)** → Finance; **Security QA & Abuse Case Testing** → Security; **Security Incident Handling & Breach Response** → Security, Compliance; **CloudTrail, Config & Audit on AWS** → Compliance; **Software Supply Chain in CI (SBOM, signing, provenance)** → Security; **Sensitive Data in Logs & Log Redaction** → Compliance; **Audit Logs & Security Event Logging (ops)** → Compliance; **Data Catalog, Lineage & Governance** → Compliance; **Data Access Control & Row/Column Masking (analytics)** → Compliance; **Guardrails, Safety & Prompt Injection** → Security; **Conversational Memory & Personalization** → Compliance; **AI Ethics, Bias & Fairness** → Compliance; **AI Data Governance & Training Data Rights** → Compliance; **Agent Safety, Permissions & Sandboxing** → Security; **ERP Integrations (SAP, Oracle, Odoo, Dynamics, NetSuite)** → Finance; **Accounting Software Integrations (QuickBooks, Xero, Zoho Books)** → Finance; **Government, Tax & E-invoicing Portals** → Finance, Compliance; **Payment Providers (Stripe, Adyen, PayPal, local PSPs)** → Finance; **Banking APIs & Open Banking** → Finance; **Identity Verification & KYC Vendors** → Compliance; **Legal Text (terms, privacy, licenses, disclaimers)** → Compliance; **Pricing & Packaging Decisions (product)** → Finance; **Dependency, License & Security Policy Decisions** → Security; **Blockchain & Smart Contracts** → Finance, Security.
 
 ## Overrides (project `## abofles overrides` block)
 
-- `- Workflow: <Group letter | Group name | Topic> = Read, Work, Verify` — the steps of a `change` on that group or topic (advice to the skill; the hook does not enforce steps).
-- `- Reviewers: <Group letter | Group name | Topic> = security, tester` — replaces the reviewers of that group or topic at T3 and T4 (names as in the table, lower case; `none` = no reviewer).
+- `- Workflow: <Domain code | Domain name | Topic> = Read, Work, Verify` — the steps of a `change` on that domain or topic (advice to the skill; the hook does not enforce steps).
+- `- Reviewers: <Domain code | Domain name | Topic> = security, tester` — replaces the reviewers of that domain or topic at T3 and T4 (names as in the table, lower case; `none` = no reviewer).
 - `- Review: <Tag> / T<tier> = model·effort` — the cell of one reviewer at one tier.
 - `- Review gate = auto | on | warn | off`.

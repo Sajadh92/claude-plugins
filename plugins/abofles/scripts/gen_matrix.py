@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
-"""Single source of truth for the abofles topic matrix.
+"""Generator for the abofles topic matrix.
 
-Edit TIERS / TOPICS below, then run:
+Topics live in scripts/topics_data.py (DOMAINS: 27 domains, areas, 1,100+ topic lines); tiers, caps,
+reviewers, intents and workflows live below. Edit, then run:
 
     python3 scripts/gen_matrix.py
 
-It rewrites the topic index inside skills/abofles/references/topics.md (between
-the `<!-- topics:start -->` / `<!-- topics:end -->` markers) and regenerates
-skills/abofles/references/matrix.md, skills/abofles/references/workflow.md (the
-workflow per intent and tier, the specialist reviewers per group) and
-hooks/workflow.json (the same, for the review gate in the hook). `--check` writes
-nothing and exits 1 when any file is out of date.
+It regenerates skills/abofles/references/topics.md (the domain table the skill reads),
+skills/abofles/references/topic-index.md (every topic by domain and area — for people, not the model),
+skills/abofles/references/matrix.md (tier bases, caps, reviewers per domain), skills/abofles/references/workflow.md
+and hooks/workflow.json (domains, topics with signals and overrides, tiers, caps — read by the hook's review gate and
+by scripts/topic.py, the lookup the skill calls). `--check` writes nothing and exits 1 when any file is out of date.
 """
 import json
+import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from topics_data import DOMAINS, SUGGESTIONS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 TOPICS_MD = ROOT / "skills/abofles/references/topics.md"
+INDEX_MD = ROOT / "skills/abofles/references/topic-index.md"
 MATRIX = ROOT / "skills/abofles/references/matrix.md"
 WORKFLOW_MD = ROOT / "skills/abofles/references/workflow.md"
 WORKFLOW_JSON = ROOT / "hooks/workflow.json"
@@ -57,30 +63,16 @@ REVIEWERS = {
     "qa": ("QA", "🎯", "abofles-qa", "acceptance against the ticket, user flows end to end, regressions, error paths", "read + run"),
     "uiux": ("UIUX", "🎨", "abofles-uiux", "accessibility, RTL, responsive layout, design tokens, copy; Better Design and UX Pilot connectors when connected", "all tools (connectors)"),
     "cleancoder": ("Clean", "🧹", "abofles-cleancoder", "naming, duplication, dead code, structure — no behaviour change", "read-only"),
+    "dba": ("DBA", "🗄️", "abofles-dba", "migration safety and reversibility, locks and long transactions, indexes and query plans, constraints, replicas and backups", "read + run read-only SQL"),
+    "ops": ("Ops", "⚙️", "abofles-ops", "pipeline and deploy safety, IaC plan and drift, rollback path, secrets exposure, server and network config, blast radius", "read-only"),
+    "perf": ("Perf", "⚡", "abofles-perf", "hot paths and complexity, N+1 and round-trips, allocations, caching, benchmark or load evidence before and after", "read + run benchmarks"),
+    "data": ("Data", "📊", "abofles-data", "pipeline idempotency and backfills, metric definitions, aggregation correctness, double counting, freshness, data contracts", "read + run read-only queries"),
 }
 
-# Reviewers per group and tier (T1/T2: the generic verifier only). The first one is the group's primary reviewer.
-GROUP_REVIEWERS = {
-    "A": {3: ["security"], 4: ["security", "tester"]},
-    "B": {3: ["finance"], 4: ["finance", "security", "tester"]},
-    "C": {3: ["qa"], 4: ["qa", "tester"]},
-    "D": {3: ["tester"], 4: ["tester", "qa"]},
-    "E": {3: ["tester"], 4: ["tester", "qa"]},
-    "F": {3: ["cleancoder"], 4: ["cleancoder", "tester"]},
-    "G": {3: [], 4: ["security"]},
-    "H": {3: [], 4: ["security", "tester"]},
-    "I": {3: ["qa"], 4: ["qa", "security"]},
-    "J": {3: ["security"], 4: ["security"]},
-    "K": {3: ["uiux"], 4: ["uiux", "qa"]},
-    "L": {3: [], 4: []},
-    "M": {3: ["qa"], 4: ["qa"]},
-}
-
-# Reviewers a topic always adds on top of its group's (T3 and T4).
-TOPIC_REVIEWERS = {
-    "Data Privacy, PII & Compliance": ["compliance"],
-    "Audit Logging & Traceability": ["compliance"],
-}
+# Reviewers per domain and tier come from topics_data.DOMAINS (T1/T2: the generic verifier only). The first one is the
+# domain's primary reviewer. A topic adds its own with `| +reviewer` on its line.
+GROUP_REVIEWERS = {code: {3: list(rev.get(3, [])), 4: list(rev.get(4, []))} for code, _, _, rev, _ in DOMAINS}
+TOPIC_REVIEWERS = {}  # filled by parse_topics()
 
 # Workflow = the ordered steps of a task, by intent (what the ask is) and, for a change, by tier. "Review" = the
 # specialist reviewers of the topic's group at that tier, run in parallel after Verify passes. Judge / Explain are
@@ -100,245 +92,76 @@ CHANGE_WORKFLOWS = {
 }
 REVIEW_GATE = {3: "warn", 4: "on"}  # default `Review gate = auto`: T4 refuses the receipt once, T3 warns in the guide
 
-# (group letter, group name, [(topic, tier, overrides, signals[, cap overrides]), ...])
-# Numbering is assigned in order, starting at 1.
-TOPICS = [
-    ("A", "Security & Trust", [
-        ("Security & Risk Review", 4, {"Analyse": "fable·medium"},
-         "threat model, OWASP, attack surface, vulnerability", {"Analyse": 80}),
-        ("Authentication (login, sessions, tokens, MFA)", 4, {},
-         "login, JWT, OAuth, session, refresh token, OTP, password reset"),
-        ("Authorization, Roles & Permissions", 4, {},
-         "RBAC, ACL, policy, scope, admin, ownership check, IDOR"),
-        ("Secrets, Keys & Config Security", 4, {"Work": "sonnet·high"},
-         ".env, API key, vault, certificate, hard-coded secret"),
-        ("Data Privacy, PII & Compliance", 4, {},
-         "PII, GDPR, PCI, KYC, data retention, masking, consent"),
-        ("Input Validation & Injection", 3, {},
-         "SQLi, XSS, SSRF, CSRF, sanitize, escape, file upload"),
-        ("Cryptography, Hashing & Signing", 4, {},
-         "bcrypt, argon2, HMAC, AES, RSA, signature, nonce, salt"),
-        ("Rate Limiting, Abuse & Fraud Prevention", 3, {},
-         "throttle, brute force, bot, captcha, velocity check, blacklist"),
-        ("Audit Logging & Traceability", 3, {"Work": "sonnet·medium"},
-         "audit trail, who did what, immutable log, compliance log"),
-        ("Dependency Vulnerabilities (CVE scan)", 3, {"Read": "haiku·low"},
-         "npm audit, CVE, Snyk, Dependabot, advisory", {"Read": 60}),
-    ]),
-    ("B", "Money & Finance", [
-        ("Financial & Amount Calculations", 4, {"Analyse": "fable·medium"},
-         "amount, decimal, rounding, currency math, totals, precision"),
-        ("Revenue Flow & Profit", 4, {},
-         "revenue, margin, profit split, payout, settlement"),
-        ("Payments & Gateway Integration", 4, {},
-         "Stripe, PSP, card, 3DS, payment intent, capture, authorize"),
-        ("Pricing, Fees, Commission & Tax", 4, {},
-         "price, fee, commission, VAT, tax, discount, coupon, tier pricing"),
-        ("Wallets, Balances & Ledger", 4, {},
-         "wallet, balance, ledger, double entry, debit, credit, hold"),
-        ("Refunds, Chargebacks & Reversals", 4, {},
-         "refund, chargeback, dispute, reversal, void, partial refund"),
-        ("Reconciliation & Financial Reports", 3, {},
-         "reconcile, statement, mismatch, settlement report, export"),
-        ("Invoicing & Billing Cycles", 3, {},
-         "invoice, subscription, billing period, proration, dunning"),
-        ("Multi-currency & Exchange Rates", 4, {},
-         "FX, exchange rate, conversion, base currency, IQD, USD"),
-    ]),
-    ("C", "Business Logic & Workflows", [
-        ("Business Logic (domain rules)", 3, {},
-         "business rule, domain, eligibility, calculation, policy"),
-        ("Status & Workflows (state machines)", 3, {"Analyse": "opus·high"},
-         "status, state machine, transition, approval flow, lifecycle"),
-        ("Validation Rules & Constraints", 3, {},
-         "required field, limit, range, uniqueness, business validation"),
-        ("Notifications & Messaging", 2, {},
-         "email, SMS, push, template, notification preference"),
-        ("Scheduling, Time Zones & Calendars", 3, {},
-         "cron, timezone, DST, date math, recurring, booking slot"),
-        ("Multi-tenancy & Account Isolation", 4, {},
-         "tenant, organization, workspace, data isolation, tenant_id"),
-        ("Reporting & Dashboards (business)", 2, {},
-         "report, KPI, aggregate, chart data, export CSV, summary"),
-        ("Import, Export & Data Migration (business data)", 3, {},
-         "CSV import, bulk upload, ETL, data migration, mapping"),
-    ]),
-    ("D", "Quality & Testing", [
-        ("Quality Assurance (strategy & coverage)", 2, {},
-         "test plan, coverage, test pyramid, acceptance criteria"),
-        ("Unit Test", 2, {},
-         "unit test, jest, pytest, xUnit, mock, assert"),
-        ("Integration & API Test", 2, {},
-         "integration test, API test, supertest, test DB, Postman"),
-        ("End to End Test", 2, {"Work": "sonnet·high"},
-         "E2E, Playwright, Cypress, Selenium, user journey"),
-        ("Test Data, Fixtures & Mocks", 1, {},
-         "fixture, factory, seed, faker, stub, mock server"),
-        ("Regression & Smoke Check", 1, {},
-         "smoke test, regression, sanity check, run the suite"),
-        ("Flaky Test Hunting", 2, {},
-         "flaky, intermittent, timing, retry, nondeterministic"),
-        ("Performance & Load Testing", 3, {},
-         "load test, k6, JMeter, latency, throughput, p95, benchmark"),
-        ("Contract & Snapshot Tests", 2, {},
-         "contract test, Pact, snapshot, schema test, golden file"),
-    ]),
-    ("E", "Debugging & Incidents", [
-        ("Bug Fix & Debugging", 3, {},
-         "bug, stack trace, reproduce, fix, regression"),
-        ("Incident & Production Debug", 4, {"Analyse": "fable·medium"},
-         "outage, prod down, 500s, hotfix, on-call, incident", {"Analyse": 80}),
-        ("Root Cause Analysis & Postmortem", 3, {"Analyse": "opus·high"},
-         "root cause, RCA, postmortem, timeline, five whys", {"Analyse": 60}),
-        ("Log & Trace Investigation", 2, {},
-         "logs, trace, correlation id, Sentry, grep logs, span"),
-        ("Memory Leaks & Resource Exhaustion", 3, {},
-         "memory leak, OOM, file handles, connection pool exhausted"),
-        ("Data Corruption & Recovery", 4, {},
-         "corrupt data, bad migration, restore, repair script, backfill"),
-    ]),
-    ("F", "Code Health", [
-        ("Clean Code (naming, structure, readability)", 2, {},
-         "clean code, naming, readability, small functions, SOLID"),
-        ("Refactoring (behavior-preserving)", 3, {},
-         "refactor, extract, inline, restructure, no behavior change"),
-        ("Lint, Format & Style", 1, {"Work": "haiku·low"},
-         "eslint, prettier, black, formatting, style guide, warnings"),
-        ("Dead Code & Tech Debt", 2, {},
-         "unused, dead code, TODO, deprecated, debt, cleanup"),
-        ("Error Handling & Resilience", 3, {},
-         "try/catch, exception, retry, fallback, circuit breaker, timeout"),
-        ("Logging & Observability (instrumentation)", 2, {},
-         "logger, log level, metrics, tracing, OpenTelemetry"),
-        ("Code Duplication & Reuse", 2, {},
-         "duplicate, DRY, shared helper, copy-paste, utility"),
-        ("Type Safety & Static Analysis", 2, {},
-         "TypeScript, type error, any, strict mode, mypy, nullability"),
-        ("Code Comments & Inline Docs", 1, {},
-         "comment, docstring, JSDoc, XML doc, explain code"),
-    ]),
-    ("G", "Architecture & Design", [
-        ("Architecture, Design Pattern & Stack Used", 4, {"Plan": "fable·medium", "Work": "sonnet·high"},
-         "architecture, layers, pattern, stack choice, structure, clean architecture", {"Plan": 200}),
-        ("Module Boundaries & Dependency Graph", 3, {},
-         "coupling, cohesion, circular dependency, module, package layout"),
-        ("API Design & Contracts", 3, {},
-         "REST, GraphQL, gRPC, endpoint design, versioning, DTO, breaking change"),
-        ("Event-driven & Messaging Architecture", 3, {},
-         "event, pub/sub, Kafka, RabbitMQ, saga, eventual consistency"),
-        ("Microservices vs Monolith Decisions", 4, {"Plan": "fable·medium", "Work": "sonnet·medium"},
-         "split service, monolith, bounded context, service boundary"),
-        ("Domain Modeling (DDD, entities, aggregates)", 3, {},
-         "entity, aggregate, value object, domain model, ubiquitous language"),
-        ("Scalability & Capacity Planning", 3, {},
-         "scale, horizontal, bottleneck, capacity, sharding, load"),
-        ("Framework & Language Migration", 4, {"Work": "sonnet·high"},
-         "upgrade framework, migrate from X to Y, rewrite, port, major version", {"Plan": 200}),
-    ]),
-    ("H", "Data & Storage", [
-        ("DB Schema & Migrations", 4, {},
-         "migration, schema, table, column, index, ALTER, EF migration"),
-        ("Query & DB Performance", 3, {},
-         "slow query, N+1, index, EXPLAIN, query plan, ORM"),
-        ("Data Integrity & Constraints", 4, {},
-         "foreign key, unique, NOT NULL, orphan rows, consistency, cascade"),
-        ("Caching Strategy", 3, {},
-         "cache, Redis, TTL, invalidation, stale, memoize"),
-        ("Concurrency, Locking & Race Conditions", 4, {},
-         "race condition, lock, transaction, isolation level, deadlock, atomic"),
-        ("Backups, Retention & Archival", 3, {},
-         "backup, restore, retention, archive, cold storage, purge"),
-        ("Search & Indexing (full-text)", 2, {},
-         "search, Elasticsearch, full-text, relevance, tokenizer"),
-        ("File Storage & Media Handling", 2, {},
-         "S3, blob, upload, image resize, CDN, signed URL"),
-    ]),
-    ("I", "Integrations & Async", [
-        ("3rd-party Integrations & Webhooks", 3, {},
-         "webhook, callback, integration, partner API, signature verify"),
-        ("Background Jobs & Queues", 3, {},
-         "job, worker, queue, Hangfire, Celery, BullMQ, scheduler"),
-        ("Real-time (WebSockets, SSE, Push)", 3, {},
-         "WebSocket, SignalR, SSE, live update, socket.io"),
-        ("External API Clients & SDK Usage", 2, {},
-         "HTTP client, SDK, API wrapper, pagination, auth header"),
-        ("Idempotency & Retry Logic", 4, {},
-         "idempotency key, duplicate request, retry, exactly once, backoff"),
-        ("AI / LLM Integration", 2, {"Analyse": "opus·medium"},
-         "prompt, LLM, Claude API, tool use, embeddings, agent loop"),
-    ]),
-    ("J", "Dependencies & DevOps", [
-        ("Packages & Libs Updates", 2, {"Analyse": "sonnet·high"},
-         "upgrade package, bump version, breaking change, changelog, lockfile"),
-        ("CI/CD & Build Pipelines", 2, {},
-         "GitHub Actions, pipeline, build, artifact, deploy step"),
-        ("Docker, Containers & Orchestration", 3, {},
-         "Dockerfile, compose, Kubernetes, image, container"),
-        ("Infra as Code & Cloud Config", 3, {},
-         "Terraform, IAM, cloud, VPC, bucket policy, serverless config"),
-        ("Environment & Config Files", 2, {},
-         "appsettings, .env, config, feature config, per-environment"),
-        ("Release, Versioning & Changelog", 1, {},
-         "release notes, semver, tag, changelog, version bump"),
-        ("Monitoring, Alerts & Health Checks", 2, {},
-         "health endpoint, alert, uptime, Grafana, dashboard, SLO"),
-        ("Feature Flags & Rollouts", 2, {},
-         "feature flag, toggle, canary, gradual rollout, A/B"),
-    ]),
-    ("K", "Frontend & UX", [
-        ("UI Components & Styling", 2, {},
-         "component, Tailwind, CSS, design system, button, layout"),
-        ("UX Flows & Accessibility", 2, {},
-         "user flow, a11y, ARIA, keyboard, screen reader, empty state"),
-        ("State Management (frontend)", 2, {},
-         "store, Redux, Zustand, context, cache, React Query"),
-        ("Forms & Client-side Validation", 2, {},
-         "form, input, validation message, submit, controlled input"),
-        ("Responsive, RTL & Theming", 2, {},
-         "responsive, breakpoint, RTL, dark mode, theme tokens"),
-        ("Frontend Performance", 2, {},
-         "bundle size, lazy load, render, Core Web Vitals, memo"),
-        ("Mobile-specific (iOS, Android, cross-platform)", 2, {},
-         "SwiftUI, Kotlin, React Native, Flutter, permissions, offline"),
-    ]),
-    ("L", "Docs & Content", [
-        ("Work on Document (README, guides)", 1, {},
-         "README, guide, how-to, markdown, wiki, write up"),
-        ("Code Match Documents (docs vs code drift)", 2, {},
-         "docs out of date, verify docs, spec vs implementation, drift", {"Analyse": 40}),
-        ("API Docs (OpenAPI / Swagger)", 1, {},
-         "OpenAPI, Swagger, endpoint docs, schema docs, examples"),
-        ("Legal & Marketing Content & Translation", 2, {"Analyse": "opus·medium"},
-         "terms, privacy policy, landing copy, marketing text, translate"),
-        ("i18n & l10n (strings, locales)", 2, {},
-         "i18n, locale, translation keys, plural rules, date format"),
-        ("Codebase Exploration & Onboarding", 1, {},
-         "where is, how does, map the repo, explain module, onboarding", {"Read": 120}),
-        ("Architecture Decision Records (ADR)", 2, {},
-         "ADR, decision log, why we chose, trade-off record"),
-    ]),
-    ("M", "Product & Scope", [
-        ("Check MVP vs Advance", 3, {"Work": "sonnet·medium", "Verify": "sonnet·low"},
-         "MVP, scope cut, nice to have, phase 1, over-engineering"),
-        ("Feature Scoping & Requirements", 3, {"Work": "sonnet·medium"},
-         "requirements, user story, acceptance criteria, scope, spec"),
-        ("Analytics & Tracking Events", 2, {},
-         "tracking event, analytics, funnel, Amplitude, GA, event schema"),
-        ("User Feedback & Bug Triage", 1, {},
-         "triage, prioritize, severity, user report, label issues"),
-        ("Competitor & Feature Parity Check", 2, {"Read": "sonnet·low"},
-         "competitor, parity, benchmark features, market check"),
-    ]),
-]
+TOPIC_RE = re.compile(r"^(?P<name>[^|]+?)\s*\|\s*T(?P<tier>[1-4])\s*\|\s*(?P<signals>[^|]*?)\s*(?:\|\s*(?P<rest>.*))?$")
+
+
+def parse_line(line):
+    """'Name | T# | signals[ | ov Side=cell,...][ | cap Side=N,...][ | +rev,+rev]' -> (name, tier, ov, signals, caps, extra_reviewers)."""
+    m = TOPIC_RE.match(line.strip())
+    if not m:
+        raise ValueError(f"bad topic line: {line!r}")
+    ov, caps, extra = {}, {}, []
+    for part in (m.group("rest") or "").split("|"):
+        part = part.strip()
+        if not part:
+            continue
+        if part.startswith("ov "):
+            for kv in part[3:].split(","):
+                k, v = kv.split("=")
+                ov[k.strip()] = v.strip()
+        elif part.startswith("cap "):
+            for kv in part[4:].split(","):
+                k, v = kv.split("=")
+                caps[k.strip()] = int(v)
+        elif part.startswith("+"):
+            extra += [x.strip().lstrip("+") for x in part.split(",") if x.strip()]
+        else:
+            raise ValueError(f"bad topic suffix {part!r} in {line!r}")
+    for k in list(ov) + list(caps):
+        if k not in SIDES:
+            raise ValueError(f"unknown side {k!r} in {line!r}")
+    for r in extra:
+        if r not in REVIEWERS:
+            raise ValueError(f"unknown reviewer {r!r} in {line!r}")
+    return m.group("name").strip(), int(m.group("tier")), ov, m.group("signals").strip(), caps, extra
+
+
+def parse_topics():
+    """[(code, domain name, blurb, [(area, [(name, tier, ov, signals, caps)])])] — also fills TOPIC_REVIEWERS and checks uniqueness."""
+    out, seen = [], set()
+    for code, name, blurb, rev, areas in DOMAINS:
+        for k in list(rev.get(3, [])) + list(rev.get(4, [])):
+            if k not in REVIEWERS:
+                raise ValueError(f"unknown reviewer {k!r} on domain {code}")
+        rows_by_area = []
+        for area, lines in areas:
+            rows = []
+            for line in lines:
+                tname, tier, ov, sig, caps, extra = parse_line(line)
+                if tname in seen:
+                    raise ValueError(f"duplicate topic name: {tname}")
+                seen.add(tname)
+                if extra:
+                    TOPIC_REVIEWERS[tname] = extra
+                rows.append((tname, tier, ov, sig, caps))
+            rows_by_area.append((area, rows))
+        out.append((code, name, blurb, rows_by_area))
+    return out
+
+
+PARSED = parse_topics()
+# (code, domain name, [(topic, tier, overrides, signals, cap overrides), ...]) — flat per domain, areas merged in order
+TOPICS = [(code, name, [row for _, rows in areas for row in rows]) for code, name, _, areas in PARSED]
+DOMAIN_BLURB = {code: blurb for code, _, blurb, _ in PARSED}
+DOMAIN_AREAS = {code: areas for code, _, _, areas in PARSED}
+TIER_NAME = {1: "🟢 Minor", 2: "🟡 Normal", 3: "🟠 Sensitive", 4: "🔴 Critical"}
 
 
 def numbered():
     n = 0
     for letter, group, rows in TOPICS:
         out = []
-        for row in rows:
-            topic, tier, ov, sig = row[:4]
-            capov = row[4] if len(row) > 4 else {}
+        for topic, tier, ov, sig, capov in rows:
             n += 1
             out.append((n, topic, tier, ov, sig, capov))
         yield letter, group, out
@@ -349,78 +172,8 @@ def cell(tier, ov, side):
     return f"**{v}**" if side in ov else v
 
 
-def build_index():
-    lines = []
-    for letter, group, rows in numbered():
-        lines.append(f"**{letter}. {group}**")
-        for n, topic, tier, ov, _, capov in rows:
-            parts = [f"{k}={v}" for k, v in ov.items()]
-            parts += [f"cap {k}={v}" for k, v in capov.items()]
-            o = (" — " + ", ".join(parts)) if parts else ""
-            lines.append(f"- {n}. {topic} · T{tier}{o}")
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def build_matrix():
-    m = [
-        "# Abo Fles — Full Matrix",
-        "",
-        "Generated by `scripts/gen_matrix.py`. Do not edit by hand.",
-        "",
-        "Each cell is `model·effort`. **Bold** = override of the tier base. "
-        "Caps = reply-cap overrides in lines. Signals = words in the task that point to this topic.",
-        "",
-        "Sides: " + " · ".join(f"{k} = {v}" for k, v in SIDE_NAMES.items()),
-        "",
-        "## Tier base",
-        "",
-        "| Tier | Read | Analyse | Plan | Work | Verify |",
-        "|---|---|---|---|---|---|",
-    ]
-    for t, cells in TIERS.items():
-        m.append(f"| T{t} | " + " | ".join(cells[s] for s in SIDES) + " |")
-    m += [
-        "",
-        "## Reply cap base (lines, status header excluded)",
-        "",
-        "| Tier | Read | Analyse | Plan | Work | Verify |",
-        "|---|---|---|---|---|---|",
-    ]
-    for t, caps in CAPS.items():
-        m.append(f"| T{t} | " + " | ".join(str(caps[s]) for s in SIDES) + " |")
-    m += [
-        "",
-        "Never cut a finding to fit a cap. Rank, keep the top ones in full, "
-        "end with `+N more: <one line each>`. Caps column below lists only overrides.",
-        "",
-    ]
-    total = 0
-    for letter, group, rows in numbered():
-        total += len(rows)
-        g = GROUP_REVIEWERS.get(letter, {})
-        m += [
-            f"## {letter}. {group}",
-            "",
-            f"Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 {rev_names(g.get(3, []))} · 🔴 T4 {rev_names(g.get(4, []))}",
-            "",
-            "| # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |",
-            "|---|---|---|---|---|---|---|---|---|---|",
-        ]
-        for n, topic, tier, ov, sig, capov in rows:
-            capcol = " ".join(f"{k}={v}" for k, v in capov.items()) or "base"
-            m.append(
-                f"| {n} | {topic} | T{tier} | "
-                + " | ".join(cell(tier, ov, s) for s in SIDES)
-                + f" | {capcol} | {sig} |"
-            )
-        m.append("")
-    m[2] = f"Generated by `scripts/gen_matrix.py` — {total} topics in {len(TOPICS)} groups. Do not edit by hand."
-    return "\n".join(m)
-
-
 def reviewers_of(letter, topic, tier):
-    """The reviewer keys a topic needs at a tier: its group's list plus the topic's own, in order, no repeats."""
+    """The reviewer keys a topic needs at a tier: its domain's list plus the topic's own, in order, no repeats."""
     if tier < 3:
         return []
     out = list(GROUP_REVIEWERS.get(letter, {}).get(tier, []))
@@ -432,6 +185,133 @@ def reviewers_of(letter, topic, tier):
 
 def rev_names(keys):
     return ", ".join(REVIEWERS[k][0] for k in keys) if keys else "—"
+
+
+def tier_span(rows):
+    ts = sorted({t for _, t, *_ in rows})
+    return "T%d" % ts[0] if len(ts) == 1 else "T%d–T%d" % (ts[0], ts[-1])
+
+
+def build_topics_md():
+    """topics.md: the domain table the skill reads (short), plus how to look a topic up. Never the topic list."""
+    total = sum(len(r) for _, _, r in TOPICS)
+    m = [
+        "# Topics — domains and lookup",
+        "",
+        f"Generated by `scripts/gen_matrix.py` from `scripts/topics_data.py` — {total} topics in {len(TOPICS)} domains. Do not edit by hand.",
+        "",
+        "**Never read the topic list to route.** Look the topic up with one Bash call (≤ 6 lines back): "
+        "`python3 \"<plugin>/scripts/topic.py\" find \"<the ask, 3–8 words>\"` — the SessionStart note `abofles: topic lookup = …` carries the exact path; "
+        "`topic.py show <#|name>` prints one topic's cells, `topic.py domains` this table, `topic.py list <CODE>` a domain. "
+        "Project overrides (`Topic: Name = T#`, `Topic / Side = cell`, `Topic / Side cap = N`) are applied in the output and marked `· Project Override`. "
+        "The whole list is in [topic-index.md](topic-index.md) (for people).",
+        "",
+        "| Code | Domain | Tiers | Covers | Reviewers 🟠 T3 → 🔴 T4 |",
+        "|---|---|---|---|---|",
+    ]
+    for code, name, rows in TOPICS:
+        g = GROUP_REVIEWERS.get(code, {})
+        m.append(f"| `{code}` | {name} | {tier_span(rows)} | {DOMAIN_BLURB[code]} | {rev_names(g.get(3, []))} → {rev_names(g.get(4, []))} |")
+    m += [
+        "",
+        "Topic not found (no match or score too low): take the closest domain's typical tier from the fast tier test and name the nearest topic in the route line; tell the user the topic is new so it can be added to `topics_data.py`.",
+        "",
+    ]
+    return "\n".join(m)
+
+
+def build_topic_index():
+    """topic-index.md: every topic by domain and area — `#. Name · T# — overrides` — for browsing, not for routing."""
+    total = sum(len(r) for _, _, r in TOPICS)
+    m = [
+        "# Topic index (full)",
+        "",
+        f"Generated by `scripts/gen_matrix.py` — {total} topics in {len(TOPICS)} domains. For people: the model routes with `scripts/topic.py find`, never by reading this file.",
+        "",
+        "`N. Topic · Tier — cell overrides, cap overrides, +extra reviewers` (sides named in full). Only the overrides differ from the tier base ([matrix.md](matrix.md)).",
+        "",
+    ]
+    n = 0
+    for code, name, blurb, areas in PARSED:
+        g = GROUP_REVIEWERS.get(code, {})
+        m.append(f"## {code}. {name}")
+        m.append("")
+        m.append(f"{blurb}. Reviewers: 🟠 {rev_names(g.get(3, []))} · 🔴 {rev_names(g.get(4, []))}.")
+        for area, rows in areas:
+            m.append("")
+            m.append(f"**{area}**")
+            for topic, tier, ov, _, capov in rows:
+                n += 1
+                parts = [f"{k}={v}" for k, v in ov.items()] + [f"cap {k}={v}" for k, v in capov.items()]
+                parts += [f"+{REVIEWERS[r][0]}" for r in TOPIC_REVIEWERS.get(topic, [])]
+                o = (" — " + ", ".join(parts)) if parts else ""
+                m.append(f"- {n}. {topic} · T{tier}{o}")
+        m.append("")
+    return "\n".join(m).rstrip() + "\n"
+
+
+def build_matrix():
+    m = [
+        "# Abo Fles — Matrix",
+        "",
+        "Generated by `scripts/gen_matrix.py`. Do not edit by hand.",
+        "",
+        "Each cell is `model·effort`. A topic's cells are its tier's row below unless its line in `topics_data.py` overrides one "
+        "(`scripts/topic.py show <topic>` prints the final cells, with project overrides applied).",
+        "",
+        "Sides: " + " · ".join(f"{k} = {v}" for k, v in SIDE_NAMES.items()),
+        "",
+        "## Tier base",
+        "",
+        "| Tier | A mistake means… | Read | Analyse | Plan | Work | Verify |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    means = {1: "cosmetic, local, instantly reversible", 2: "a test catches it; dev-only; reversible with a redeploy",
+             3: "wrong production behaviour, business rule, shared infra, SLO", 4: "money, auth, secrets, PII, data loss, prod infra, irreversible"}
+    for t, cells in TIERS.items():
+        m.append(f"| {TIER_NAME[t]} (T{t}) | {means[t]} | " + " | ".join(cells[s] for s in SIDES) + " |")
+    m += [
+        "",
+        "## Reply cap base (lines, status header excluded)",
+        "",
+        "| Tier | Read | Analyse | Plan | Work | Verify |",
+        "|---|---|---|---|---|---|",
+    ]
+    for t, caps in CAPS.items():
+        m.append(f"| T{t} | " + " | ".join(str(caps[s]) for s in SIDES) + " |")
+    m += [
+        "",
+        "Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N more: <one line each>`.",
+        "",
+        "## Tier bumps (applied by the skill, Step 2)",
+        "",
+        "- **+1** when the ask names production, live customers, real money or real personal data and the topic's tier is below T4 (`prod`, `live`, `customer data`, `in production`).",
+        "- **−1** (floor T1; never below T3 for Money, Security, Privacy topics) when the ask is read-only, a dry run, local-only or a sandbox (`read only`, `dry run`, `localhost`, `sandbox`, `test mode`).",
+        "- A read that only collects facts stays **Codebase Exploration & Onboarding (T1)** whatever code it touches.",
+        "",
+        "## Domains",
+        "",
+        "| Code | Domain | Topics | Tiers | Areas | Reviewers 🟠 T3 | Reviewers 🔴 T4 |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    total = 0
+    for code, name, blurb, areas in PARSED:
+        rows = [r for _, rs in areas for r in rs]
+        total += len(rows)
+        g = GROUP_REVIEWERS.get(code, {})
+        m.append(f"| `{code}` | {name} | {len(rows)} | {tier_span(rows)} | " + "; ".join(f"{a} ({len(rs)})" for a, rs in areas) + f" | {rev_names(g.get(3, []))} | {rev_names(g.get(4, []))} |")
+    m += ["", "## Cell overrides (topics whose cells differ from the tier base)", "", "| # | Topic | Domain | Tier | Overrides | Caps |", "|---|---|---|---|---|---|"]
+    for letter, group, rows in numbered():
+        for n, topic, tier, ov, sig, capov in rows:
+            if ov or capov:
+                m.append(f"| {n} | {topic} | {letter} | T{tier} | " + (", ".join(f"{k}={v}" for k, v in ov.items()) or "—") + " | " + (", ".join(f"{k}={v}" for k, v in capov.items()) or "—") + " |")
+    m += ["", "Topics that always add a reviewer (T3 and T4): " + "; ".join(f"**{t}** → {rev_names(v)}" for t, v in TOPIC_REVIEWERS.items()) + ".", ""]
+    m += ["## Suggestions (`💡 suggest` lines of the lookup)", ""]
+    for sug in SUGGESTIONS:
+        m.append(f"- **{sug['name']}** (stack `{sug['stack']}`) on: " + "; ".join(sug["topics"]) + f". {sug['text']}")
+    m.append("")
+    m[2] = f"Generated by `scripts/gen_matrix.py` — {total} topics in {len(TOPICS)} domains ([topic-index.md](topic-index.md) lists them; `scripts/topic.py` finds one). Do not edit by hand."
+    return "\n".join(m)
 
 
 def build_workflow_md():
@@ -450,12 +330,11 @@ def build_workflow_md():
     for k, (desc, steps) in INTENTS.items():
         m.append(f"| `{k}` | {desc} | " + (" → ".join(steps) if steps else "see the table below") + " |")
     m += ["", "## `change` by tier", "", "| Tier | Steps |", "|---|---|"]
-    tn = {1: "🟢 Minor", 2: "🟡 Normal", 3: "🟠 Sensitive", 4: "🔴 Critical"}
     for t, steps in CHANGE_WORKFLOWS.items():
-        m.append(f"| {tn[t]} (T{t}) | " + " → ".join(steps) + (" (every reviewer required)" if t == 4 else "") + " |")
+        m.append(f"| {TIER_NAME[t]} (T{t}) | " + " → ".join(steps) + (" (every reviewer required)" if t == 4 else "") + " |")
     m += [
         "",
-        "`Review` = the specialist reviewers of the topic's group at that tier (table below), spawned **in parallel after Verify passes**, each with the tier's Verify cell (model · effort · cap) unless `- Review: <Name> / T<tier> = model·effort` overrides it. A reviewer FAIL → a Work spawn fixes it → re-run **that reviewer only**. 🟢/🟡: the generic verifier alone.",
+        "`Review` = the specialist reviewers of the topic's domain at that tier (table below; `scripts/topic.py find` prints them per topic), spawned **in parallel after Verify passes**, each with the tier's Verify cell (model · effort · cap) unless `- Review: <Name> / T<tier> = model·effort` overrides it. A reviewer FAIL → a Work spawn fixes it → re-run **that reviewer only**. 🟢/🟡: the generic verifier alone.",
         "",
         "**Review gate** (hook, at the receipt): a 🔴 change closed with a required reviewer missing is refused once, naming the missing reviewers; a 🟠 change gets a 🟠 guide item instead. A reviewer you skip on purpose is named in the receipt's `workflow` line — `Security skipped: <reason>` — and the gate lets it pass. `- Review gate = auto | on | warn | off` (auto = this; on = refuse on T3 too; warn = never refuse; off = silent).",
         "",
@@ -470,18 +349,18 @@ def build_workflow_md():
         "",
         "Route line of a reviewer: `<emoji> `<Tag>` → **<Topic>** · <Model> · <Effort> · Cap <N> · <Tier>` (the Verify cell). Prompt header: `abofles: <Topic> / <Tag> · T<tier>`. Reply format: the verifier's (STATUS, CONFIDENCE, VERDICT, EVIDENCE, ISSUES, NOTE).",
         "",
-        "## Reviewers per group",
+        "## Reviewers per domain",
         "",
-        "| Group | 🟠 T3 | 🔴 T4 |",
+        "| Domain | 🟠 T3 | 🔴 T4 |",
         "|---|---|---|",
     ]
     for letter, group, _ in TOPICS:
         g = GROUP_REVIEWERS.get(letter, {})
-        m.append(f"| {letter}. {group} | {rev_names(g.get(3, []))} | {rev_names(g.get(4, []))} |")
+        m.append(f"| `{letter}` {group} | {rev_names(g.get(3, []))} | {rev_names(g.get(4, []))} |")
     m += ["", "Topics that always add a reviewer (T3 and T4): " + "; ".join(f"**{t}** → {rev_names(v)}" for t, v in TOPIC_REVIEWERS.items()) + ".", "",
           "## Overrides (project `## abofles overrides` block)", "",
-          "- `- Workflow: <Group letter | Group name | Topic> = Read, Work, Verify` — the steps of a `change` on that group or topic (advice to the skill; the hook does not enforce steps).",
-          "- `- Reviewers: <Group letter | Group name | Topic> = security, tester` — replaces the reviewers of that group or topic at T3 and T4 (names as in the table, lower case; `none` = no reviewer).",
+          "- `- Workflow: <Domain code | Domain name | Topic> = Read, Work, Verify` — the steps of a `change` on that domain or topic (advice to the skill; the hook does not enforce steps).",
+          "- `- Reviewers: <Domain code | Domain name | Topic> = security, tester` — replaces the reviewers of that domain or topic at T3 and T4 (names as in the table, lower case; `none` = no reviewer).",
           "- `- Review: <Tag> / T<tier> = model·effort` — the cell of one reviewer at one tier.",
           "- `- Review gate = auto | on | warn | off`.", ""]
     return "\n".join(m)
@@ -489,13 +368,33 @@ def build_workflow_md():
 
 def build_workflow_json():
     topics = {}
-    for letter, group, rows in numbered():
-        for n, topic, tier, ov, sig, capov in rows:
-            topics[topic] = {"group": letter, "tier": tier, "reviewers": {str(t): reviewers_of(letter, topic, t) for t in (3, 4)}}
+    for code, name, blurb, areas in PARSED:
+        for area, rows in areas:
+            for topic, tier, ov, sig, capov in rows:
+                topics[topic] = {"group": code, "area": area, "tier": tier, "signals": sig,
+                                 "reviewers": {str(t): reviewers_of(code, topic, t) for t in (3, 4)}}
+                if ov:
+                    topics[topic]["ov"] = ov
+                if capov:
+                    topics[topic]["caps"] = capov
+    n = 0
+    for _, _, rows in TOPICS:
+        for topic, *_ in rows:
+            n += 1
+            topics[topic]["n"] = n
+    for sug in SUGGESTIONS:
+        for t in sug["topics"]:
+            if t not in topics:
+                raise ValueError(f"suggestion {sug['key']} names unknown topic {t!r}")
+            topics[t].setdefault("suggest", []).append(sug["key"])
     return json.dumps({
+        "suggestions": {s["key"]: {k: v for k, v in s.items() if k != "key"} for s in SUGGESTIONS},
         "reviewers": {k: {"word": v[0], "emoji": v[1], "agent": v[2]} for k, v in REVIEWERS.items()},
-        "groups": {letter: {"name": group, "reviewers": {str(t): GROUP_REVIEWERS.get(letter, {}).get(t, []) for t in (3, 4)}} for letter, group, _ in TOPICS},
+        "groups": {code: {"name": name, "blurb": DOMAIN_BLURB[code], "areas": [a for a, _ in DOMAIN_AREAS[code]],
+                          "reviewers": {str(t): GROUP_REVIEWERS.get(code, {}).get(t, []) for t in (3, 4)}} for code, name, _ in TOPICS},
         "topics": topics,
+        "tiers": {str(t): TIERS[t] for t in TIERS},
+        "caps": {str(t): CAPS[t] for t in CAPS},
         "change": {str(t): v for t, v in CHANGE_WORKFLOWS.items()},
         "intents": {k: v[1] for k, v in INTENTS.items() if v[1]},
         "gate": {str(t): v for t, v in REVIEW_GATE.items()},
@@ -503,17 +402,8 @@ def build_workflow_json():
     }, indent=1, ensure_ascii=False) + "\n"
 
 
-def splice(text, start, end, body):
-    i = text.index(start) + len(start)
-    j = text.index(end)
-    return text[:i] + "\n" + body + text[j:]
-
-
 if __name__ == "__main__":
-    import sys
-
-    new_topics = splice(TOPICS_MD.read_text(), "<!-- topics:start -->", "<!-- topics:end -->", build_index())
-    outputs = ((TOPICS_MD, new_topics), (MATRIX, build_matrix()), (WORKFLOW_MD, build_workflow_md()), (WORKFLOW_JSON, build_workflow_json()))
+    outputs = ((TOPICS_MD, build_topics_md()), (INDEX_MD, build_topic_index()), (MATRIX, build_matrix()), (WORKFLOW_MD, build_workflow_md()), (WORKFLOW_JSON, build_workflow_json()))
     if "--check" in sys.argv[1:]:
         stale = [p.name for p, new in outputs if not p.exists() or p.read_text() != new]
         if stale:
@@ -524,4 +414,4 @@ if __name__ == "__main__":
     for p, new in outputs:
         p.write_text(new)
     count = sum(len(r) for _, _, r in TOPICS)
-    print(f"ok: {count} topics, {len(TOPICS)} groups, {len(REVIEWERS)} reviewers -> " + ", ".join(p.name for p, _ in outputs))
+    print(f"ok: {count} topics, {len(TOPICS)} domains, {len(REVIEWERS)} reviewers -> " + ", ".join(p.name for p, _ in outputs))
