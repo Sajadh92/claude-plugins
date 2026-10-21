@@ -3,7 +3,7 @@
 Read before the first Agent call of a session.
 
 **Agent gate — once per session, before the first spawn.** The `PreToolUse` hook denies the first Agent call of a session until you have asked it (unless the override says `Agents = auto | N | off`). Size the task first (Step 2: tier, topics, files; Small = T1–T2 one topic → 1–2 agents; Medium = T3 or two topics → 3–4; Large = T4, 3+ topics or 20+ files → 5–8 with parallel reads). Then ask **one** `AskUserQuestion` whose question text contains `Abo Fles agent gate`, options in this order, labels starting exactly like this:
-1. `Auto (recommended)` — description: *abofles sizes every task by topic, side and tier (Orchestrator: Minor 2 · Normal 3 · Sensitive 5 · Critical 8 agents; Worker: 1 · 2 · 4 · 6); no more questions this session; the hook denies a spawn over the budget.*
+1. `Auto (recommended)` — description: *abofles sizes every task by topic, side and tier (Orchestrator: Minor 2 · Normal 3 · Sensitive 7 · Critical 12 agents; Worker: 1 · 2 · 5 · 8); no more questions this session; the hook denies a spawn over the budget.*
 2. `This task: N agents` — N and the plan from your route lines, with `≈ <units> u · ≈ $<est>` (estimate $ from the session's average tokens per spawn in the ledger, else 300K tokens at list price); asked again next task.
 3. `Main session only` — 0 agents this task. In Orchestrator mode add *(costly: <Model> does every read itself)*.
 4. Orchestrator mode, Large task only: `Max: N agents · M parallel`. Worker mode (any tier): `Switch main to Opus 5.5 and orchestrate` — if chosen, reply with one line, `Pick Opus 5.5 in the model picker (bottom right), then send "go".`, and **end the turn** (the plugin cannot switch the model).

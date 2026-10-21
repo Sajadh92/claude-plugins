@@ -377,7 +377,7 @@ def main():
         # agent gate: ask once, parse the answer, enforce the budget and the parallel cap
         run("start", {"session_id": "ag", "cwd": cwd, "transcript_path": str(tr)}, led)  # main model in tr is fable -> orchestrator
         out = run("pre", dict(agent("haiku", "low", cwd=cwd), session_id="ag"), led)
-        check("gate: first spawn denied until the question is asked", reason(out).startswith("Abo Fles (ابو فليس): agent gate first") and "Auto (recommended)" in reason(out) and "Sensitive 5" in reason(out) and "Max: N agents" in reason(out))
+        check("gate: first spawn denied until the question is asked", reason(out).startswith("Abo Fles (ابو فليس): agent gate first") and "Auto (recommended)" in reason(out) and "Sensitive 7" in reason(out) and "Max: N agents" in reason(out))
         gq = {"session_id": "ag", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Abo Fles agent gate: how many agents for this task?", "options": []}]}}
         out = run("decision", dict(gq, tool_response={"answers": {gq["tool_input"]["questions"][0]["question"]: "This task: 2 agents"}}), led)
         check("gate: answer 'This task: 2' recorded", "agents: 2 this task" in ctx(out) and json.loads(Path(state, "ag.json").read_text()).get("task_budget") == 2)
@@ -400,11 +400,11 @@ def main():
         out = run("decision", dict(gq, tool_response={"answers": {gq["tool_input"]["questions"][0]["question"]: "Auto (recommended)"}}), led)
         check("gate: Auto recorded", "agents: auto" in ctx(out))
         p4 = dict(agent("opus", "high", "abofles:abofles-worker", prompt="abofles: Payments & Gateway Integration / Work · T4\nq\nLine cap: 40", cwd=cwd), session_id="ag")
-        for _ in range(8):
-            check("gate: auto T4 orchestrator allows 8", allowed(run("pre", p4, led)))
+        for _ in range(12):
+            check("gate: auto T4 orchestrator allows 12", allowed(run("pre", p4, led)))
             run("post", dict(p4, tool_response="STATUS: done\nCONFIDENCE: high\nCHANGED:\n- src/a.cs — x\nRAN: none\nLEFT: none"), led)
-        check("gate: auto T4 denies the 9th", "agent budget is 8 (auto · 🔴 Critical · orchestrator)" in reason(run("pre", p4, led)))
-        run("receipt", {"session_id": "ag", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **8 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y"}, led)
+        check("gate: auto T4 denies the 13th", "agent budget is 12 (auto · 🔴 Critical · orchestrator)" in reason(run("pre", p4, led)))
+        run("receipt", {"session_id": "ag", "cwd": cwd, "stop_hook_active": True, "last_assistant_message": "🧾 **8 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y"}, led)  # second Stop: the review gate's one refusal is spent
         check("gate: auto survives the task end, no question", allowed(run("pre", p1, led)))
         # parallel cap on background spawns (budget off so only the cap applies)
         Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Agents = off\n")
@@ -537,15 +537,15 @@ def main():
         check("receipt: printed while a background agent runs -> task closed", json.loads(Path(state, "bg.json").read_text()).get("spawns_since_receipt") == 0)
         # 6. answering the gate again restarts the budget count; header names gate runs apart
         run("start", {"session_id": "bb", "cwd": cwd, "transcript_path": str(tr)}, led)
-        json.dump(dict(json.loads(Path(state, "bb.json").read_text()), gate="auto", spawns_since_receipt=9, task_judges=2, task_tier_max=4), open(Path(state, "bb.json"), "w"))
+        json.dump(dict(json.loads(Path(state, "bb.json").read_text()), gate="auto", spawns_since_receipt=13, task_judges=2, task_tier_max=4), open(Path(state, "bb.json"), "w"))
         p4 = dict(agent("haiku", "low", prompt="abofles: Payments & Gateway Integration / Read · T4\nq\nLine cap: 40", cwd=cwd), session_id="bb")
-        check("budget: 7 work spawns of 8 + inflight -> 8th allowed", run("pre", p4, led) is None)
-        check("budget: 9th denied", "agent budget is 8" in reason(run("pre", p4, led)))
+        check("budget: 11 work spawns of 12 + inflight -> 12th allowed", run("pre", p4, led) is None)
+        check("budget: 13th denied", "agent budget is 12" in reason(run("pre", p4, led)))
         run("decision", {"session_id": "bb", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Abo Fles agent gate: how many?", "options": []}]}, "tool_response": {"answers": {"Abo Fles agent gate: how many?": "Auto (recommended)"}}}, led)
         json.dump(dict(json.loads(Path(state, "bb.json").read_text()), inflight=0), open(Path(state, "bb.json"), "w"))
         check("budget: answering Auto again releases a stuck budget", run("pre", p4, led) is None)
         out = run("post", dict(p4, tool_response=good), led)
-        check("budget: header counts work spawns and names gate runs apart", "🧾 **8 Spawns + 2 gate ·" in ctx(out))
+        check("budget: header counts work spawns and names gate runs apart", "🧾 **12 Spawns + 2 gate ·" in ctx(out))
         check("budget: agents.py shows used vs budget and the gate runs", "1 of budget 8 used" in ag() or "gate run" in ag() or True)
         # 6b. the Step 0 `main:` line is handed over at the first work spawn of a task
         trm = Path(cwd, "transcript-ml.jsonl"); trm.write_text(json.dumps({"type": "assistant", "message": {"model": "claude-opus-5-5", "usage": {"input_tokens": 1}}}) + "\n")
@@ -1403,6 +1403,87 @@ def main():
         check("exit: memo resolve of a resolved item exits 3, writes no trace", m2.returncode == 3 and memd("mysess").read_text().count("by hand:") == n_)
         check("exit: memo resolve of a missing item exits 1", me_("resolve", "9").returncode == 1 and me_("reopen", "9").returncode == 1)
         check("exit: memo reopen exits 0 with the given session", me_("reopen", "1", "--trace", "--session", "other").returncode == 0 and "· reopened by hand" in memd("other").read_text())
+
+    # ── 1.7.0: specialist reviewers and the review gate ──
+    with tempfile.TemporaryDirectory() as rh:
+        os.environ["ABOFLES_STATE_DIR"] = str(Path(rh, "st")); os.environ["ABOFLES_CONFIG"] = str(Path(rh, "config.json"))
+        os.environ.pop("ABOFLES_SESSION", None)
+        import importlib.util as _iu3
+        _hs3 = _iu3.spec_from_file_location("abofles_hook_rv", str(HOOK)); R = _iu3.module_from_spec(_hs3); _hs3.loader.exec_module(R)
+        led3 = str(Path(rh, "led")); Path(led3).mkdir()
+        P = Path(rh, "P"); P.mkdir(); Path(P, "src").mkdir(); Path(P, "src/a.cs").write_text("x\n")
+        trr = Path(rh, "tr.jsonl"); trr.write_text(json.dumps({"type": "assistant", "message": {"id": "m1", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "hi"}], "usage": {"input_tokens": 1, "output_tokens": 1}}}) + "\n")
+        rst = lambda sid_: json.loads(Path(rh, "st", f"{sid_}.json").read_text())
+        rows_ = lambda sid_: [json.loads(l) for l in Path(led3, f"{sid_}.jsonl").read_text().splitlines() if l.strip()]
+        VOK = "STATUS: done\nCONFIDENCE: high\nVERDICT: PASS\nEVIDENCE:\n- authz — PASS — src/a.cs:1\nISSUES:\nNOTE: none"
+        WOK = "STATUS: done\nCONFIDENCE: high\nCHANGED:\n- src/a.cs — x\nRAN: none\nLEFT: none"
+        def sp(sid_, side, stype, model="opus", effort="high", resp=WOK, topic="Payments & Gateway Integration", tier=4):
+            d = dict(agent(model, effort, stype, prompt=f"abofles: {topic} / {side} · T{tier}\nq\nLine cap: 40", resp=resp, cwd=str(P)), session_id=sid_, transcript_path=str(trr))
+            run("pre", d, led3); return run("post", d, led3)
+        def stop_(sid_, msg, active=False):
+            return run("receipt", {"session_id": sid_, "cwd": str(P), "transcript_path": str(trr), "stop_hook_active": active, "last_assistant_message": msg}, led3)
+        RCPT = "🧾 **2 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y"
+        check("review: parse_header reads the reviewer tags", R.parse_header("abofles: Payments & Gateway Integration / Security · T4")[1] == "Security" and R.parse_header("abofles: X / qa · T3")[1] == "QA"
+              and R.parse_header("abofles: X / uiux · T3")[1] == "UIUX" and R.parse_header("abofles: X / Clean · T3")[1] == "Clean" and R.parse_header("abofles: X / Verify · T2")[1] == "Verify")
+        check("review: side_of maps the reviewer agent types", R.side_of("abofles:abofles-security")[1] == "Security" and R.side_of("abofles:abofles-qa")[1] == "QA" and R.side_of("abofles:abofles-cleancoder")[1] == "Clean" and R.side_of("abofles:abofles-verifier")[1] == "Verify")
+        check("review: fable is refused for a reviewer", "fable is only for" in reason(run("pre", dict(agent("fable", "medium", "abofles:abofles-finance", cwd=str(P)), session_id="rv0"), led3)))
+        check("review: workflow.json is generated and names the reviewers per topic", (R.workflow_table().get("topics") or {}).get("Payments & Gateway Integration", {}).get("reviewers", {}).get("4") == ["finance", "security", "tester"])
+        # a T4 money change closed without its reviewers: refused once, then closed with a guide item
+        run("start", {"session_id": "rv1", "cwd": str(P), "transcript_path": str(trr)}, led3)
+        json.dump(dict(rst("rv1"), gate="auto"), open(Path(rh, "st", "rv1.json"), "w"))
+        sp("rv1", "Work", "abofles:abofles-worker")
+        sp("rv1", "Verify", "abofles:abofles-verifier", resp=VOK)
+        out = stop_("rv1", RCPT)
+        check("review gate: 🔴 change with no reviewer -> receipt refused once, naming Finance, Security, Tester and the Verify cell",
+              (out or {}).get("decision") == "block" and "review gate" in out.get("reason", "") and "Finance, Security, Tester" in out["reason"] and "Opus 5.5 · High" in out["reason"]
+              and "`abofles: Payments & Gateway Integration / Security · T4`" in out["reason"] and rst("rv1").get("spawns_since_receipt") == 2)
+        sp("rv1", "Finance", "abofles:abofles-finance", resp=VOK)
+        check("review: the ledger row carries review=finance, graded as a verifier (PASS)", any(r.get("review") == "finance" and r.get("verdict") == "PASS" and r.get("side") == "Finance" for r in rows_("rv1")))
+        out = stop_("rv1", RCPT + "\n- `workflow` → Read ✓ · Work ✓ · Verify ✓ · Finance ✓ · Security skipped: internal tool, no external input · Tester skipped: covered by Verify", active=True)
+        check("review gate: skipped reviewers named in the workflow line pass; the task closes", out is None and rst("rv1").get("spawns_since_receipt") == 0 and not rst("rv1").get("review_missing"))
+        sp("rv1", "Work", "abofles:abofles-worker")
+        out = stop_("rv1", RCPT)
+        out2 = stop_("rv1", RCPT, active=True)
+        check("review gate: the refusal is spent after one Stop; the task closes and the guide shows the missing reviewers",
+              (out or {}).get("decision") == "block" and out2 is None and rst("rv1").get("spawns_since_receipt") == 0 and rst("rv1").get("review_missing", {}).get("names") == ["finance", "security", "tester"]
+              and any(i.get("id") == "review" and "Finance, Security, Tester" in i.get("text", "") for i in (rst("rv1").get("guide") or {}).get("items") or []))
+        sp("rv1", "Work", "abofles:abofles-worker")
+        check("review gate: the next task's first spawn clears the item", not rst("rv1").get("review_missing"))
+        # T3: warn only (guide item, no refusal); Review gate = on refuses T3 too; off is silent; Reviewers: override
+        run("start", {"session_id": "rv2", "cwd": str(P), "transcript_path": str(trr)}, led3)
+        json.dump(dict(rst("rv2"), gate="auto"), open(Path(rh, "st", "rv2.json"), "w"))
+        sp("rv2", "Work", "abofles:abofles-worker", model="sonnet", topic="Business Logic (domain rules)", tier=3)
+        out = stop_("rv2", RCPT)
+        check("review gate: 🟠 change with no reviewer -> no refusal, guide item names QA", out is None and rst("rv2").get("review_missing", {}).get("names") == ["qa"])
+        Path(P, "CLAUDE.md").write_text("## abofles overrides\n- Review gate = on\n")
+        sp("rv2", "Work", "abofles:abofles-worker", model="sonnet", topic="Business Logic (domain rules)", tier=3)
+        check("review gate: Review gate = on refuses a 🟠 change too", (stop_("rv2", RCPT) or {}).get("decision") == "block")
+        stop_("rv2", RCPT, active=True)
+        Path(P, "CLAUDE.md").write_text("## abofles overrides\n- Review gate = off\n")
+        sp("rv2", "Work", "abofles:abofles-worker")
+        check("review gate: off -> a 🔴 change closes silently, no item", stop_("rv2", RCPT) is None and not rst("rv2").get("review_missing"))
+        Path(P, "CLAUDE.md").write_text("## abofles overrides\n- Reviewers: B = finance\n")
+        sp("rv2", "Work", "abofles:abofles-worker")
+        out = stop_("rv2", RCPT)
+        check("review gate: Reviewers: <group> = finance narrows the requirement", "Finance" in (out or {}).get("reason", "") and "Security" not in (out or {}).get("reason", ""))
+        stop_("rv2", RCPT, active=True)
+        Path(P, "CLAUDE.md").write_text("## abofles overrides\n- Reviewers: Payments & Gateway Integration = none\n")
+        sp("rv2", "Work", "abofles:abofles-worker")
+        check("review gate: Reviewers: <topic> = none drops it", stop_("rv2", RCPT) is None and not rst("rv2").get("review_missing"))
+        Path(P, "CLAUDE.md").unlink()
+        check("review: topic 5 adds Compliance at T3 and T4", (R.workflow_table()["topics"]["Data Privacy, PII & Compliance"]["reviewers"]["4"]) == ["security", "tester", "compliance"])
+        # a receipt printed mid-turn (closed by the next spawn's pre) cannot be refused: the gate warns in the guide and the warning survives that spawn
+        run("start", {"session_id": "rv3", "cwd": str(P), "transcript_path": str(trr)}, led3)
+        json.dump(dict(rst("rv3"), gate="auto"), open(Path(rh, "st", "rv3.json"), "w"))
+        sp("rv3", "Work", "abofles:abofles-worker")
+        with open(trr, "a") as fh:
+            fh.write(json.dumps({"type": "assistant", "message": {"id": "m9", "role": "assistant", "content": [{"type": "text", "text": RCPT}]}}) + "\n")
+        sp("rv3", "Work", "abofles:abofles-worker", topic="Business Logic (domain rules)", tier=3)
+        check("review gate: a mid-turn receipt closes the task, raises the missing reviewers in the guide, and the closing spawn keeps the item",
+              rst("rv3").get("spawns_since_receipt") == 1 and rst("rv3").get("review_missing", {}).get("names") == ["finance", "security", "tester"])
+        check("review: the gate's cell text comes from workflow.json", R.verify_cell(4) == ("opus", "high") and R.verify_cell(3) == ("sonnet", "high") and (R.workflow_table().get("verify") or {}).get("4") == "opus·high")
+        check("review: gen_matrix --check is up to date", subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "gen_matrix.py"), "--check"], capture_output=True, text=True).returncode == 0)
+        os.environ["ABOFLES_STATE_DIR"] = state
 
     # ── 1.6.0: work root (the memo follows the session's edits), memo move, resume/guide scopes, registry ──
     with tempfile.TemporaryDirectory() as wh:

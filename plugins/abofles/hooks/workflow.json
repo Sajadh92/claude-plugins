@@ -1,0 +1,1465 @@
+{
+ "reviewers": {
+  "security": {
+   "word": "Security",
+   "emoji": "🛡️",
+   "agent": "abofles-security"
+  },
+  "finance": {
+   "word": "Finance",
+   "emoji": "💰",
+   "agent": "abofles-finance"
+  },
+  "compliance": {
+   "word": "Compliance",
+   "emoji": "📜",
+   "agent": "abofles-compliance"
+  },
+  "tester": {
+   "word": "Tester",
+   "emoji": "🧪",
+   "agent": "abofles-tester"
+  },
+  "qa": {
+   "word": "QA",
+   "emoji": "🎯",
+   "agent": "abofles-qa"
+  },
+  "uiux": {
+   "word": "UIUX",
+   "emoji": "🎨",
+   "agent": "abofles-uiux"
+  },
+  "cleancoder": {
+   "word": "Clean",
+   "emoji": "🧹",
+   "agent": "abofles-cleancoder"
+  }
+ },
+ "groups": {
+  "A": {
+   "name": "Security & Trust",
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "B": {
+   "name": "Money & Finance",
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "C": {
+   "name": "Business Logic & Workflows",
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "D": {
+   "name": "Quality & Testing",
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "E": {
+   "name": "Debugging & Incidents",
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "F": {
+   "name": "Code Health",
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "G": {
+   "name": "Architecture & Design",
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "H": {
+   "name": "Data & Storage",
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "I": {
+   "name": "Integrations & Async",
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "security"
+    ]
+   }
+  },
+  "J": {
+   "name": "Dependencies & DevOps",
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "K": {
+   "name": "Frontend & UX",
+   "reviewers": {
+    "3": [
+     "uiux"
+    ],
+    "4": [
+     "uiux",
+     "qa"
+    ]
+   }
+  },
+  "L": {
+   "name": "Docs & Content",
+   "reviewers": {
+    "3": [],
+    "4": []
+   }
+  },
+  "M": {
+   "name": "Product & Scope",
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa"
+    ]
+   }
+  }
+ },
+ "topics": {
+  "Security & Risk Review": {
+   "group": "A",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Authentication (login, sessions, tokens, MFA)": {
+   "group": "A",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Authorization, Roles & Permissions": {
+   "group": "A",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Secrets, Keys & Config Security": {
+   "group": "A",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Data Privacy, PII & Compliance": {
+   "group": "A",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "security",
+     "compliance"
+    ],
+    "4": [
+     "security",
+     "tester",
+     "compliance"
+    ]
+   }
+  },
+  "Input Validation & Injection": {
+   "group": "A",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Cryptography, Hashing & Signing": {
+   "group": "A",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Rate Limiting, Abuse & Fraud Prevention": {
+   "group": "A",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Audit Logging & Traceability": {
+   "group": "A",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "security",
+     "compliance"
+    ],
+    "4": [
+     "security",
+     "tester",
+     "compliance"
+    ]
+   }
+  },
+  "Dependency Vulnerabilities (CVE scan)": {
+   "group": "A",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Financial & Amount Calculations": {
+   "group": "B",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Revenue Flow & Profit": {
+   "group": "B",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Payments & Gateway Integration": {
+   "group": "B",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Pricing, Fees, Commission & Tax": {
+   "group": "B",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Wallets, Balances & Ledger": {
+   "group": "B",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Refunds, Chargebacks & Reversals": {
+   "group": "B",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Reconciliation & Financial Reports": {
+   "group": "B",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Invoicing & Billing Cycles": {
+   "group": "B",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Multi-currency & Exchange Rates": {
+   "group": "B",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "finance"
+    ],
+    "4": [
+     "finance",
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Business Logic (domain rules)": {
+   "group": "C",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "Status & Workflows (state machines)": {
+   "group": "C",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "Validation Rules & Constraints": {
+   "group": "C",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "Notifications & Messaging": {
+   "group": "C",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "Scheduling, Time Zones & Calendars": {
+   "group": "C",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "Multi-tenancy & Account Isolation": {
+   "group": "C",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "Reporting & Dashboards (business)": {
+   "group": "C",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "Import, Export & Data Migration (business data)": {
+   "group": "C",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "tester"
+    ]
+   }
+  },
+  "Quality Assurance (strategy & coverage)": {
+   "group": "D",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Unit Test": {
+   "group": "D",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Integration & API Test": {
+   "group": "D",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "End to End Test": {
+   "group": "D",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Test Data, Fixtures & Mocks": {
+   "group": "D",
+   "tier": 1,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Regression & Smoke Check": {
+   "group": "D",
+   "tier": 1,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Flaky Test Hunting": {
+   "group": "D",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Performance & Load Testing": {
+   "group": "D",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Contract & Snapshot Tests": {
+   "group": "D",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Bug Fix & Debugging": {
+   "group": "E",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Incident & Production Debug": {
+   "group": "E",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Root Cause Analysis & Postmortem": {
+   "group": "E",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Log & Trace Investigation": {
+   "group": "E",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Memory Leaks & Resource Exhaustion": {
+   "group": "E",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Data Corruption & Recovery": {
+   "group": "E",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "tester"
+    ],
+    "4": [
+     "tester",
+     "qa"
+    ]
+   }
+  },
+  "Clean Code (naming, structure, readability)": {
+   "group": "F",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Refactoring (behavior-preserving)": {
+   "group": "F",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Lint, Format & Style": {
+   "group": "F",
+   "tier": 1,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Dead Code & Tech Debt": {
+   "group": "F",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Error Handling & Resilience": {
+   "group": "F",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Logging & Observability (instrumentation)": {
+   "group": "F",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Code Duplication & Reuse": {
+   "group": "F",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Type Safety & Static Analysis": {
+   "group": "F",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Code Comments & Inline Docs": {
+   "group": "F",
+   "tier": 1,
+   "reviewers": {
+    "3": [
+     "cleancoder"
+    ],
+    "4": [
+     "cleancoder",
+     "tester"
+    ]
+   }
+  },
+  "Architecture, Design Pattern & Stack Used": {
+   "group": "G",
+   "tier": 4,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Module Boundaries & Dependency Graph": {
+   "group": "G",
+   "tier": 3,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "API Design & Contracts": {
+   "group": "G",
+   "tier": 3,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Event-driven & Messaging Architecture": {
+   "group": "G",
+   "tier": 3,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Microservices vs Monolith Decisions": {
+   "group": "G",
+   "tier": 4,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Domain Modeling (DDD, entities, aggregates)": {
+   "group": "G",
+   "tier": 3,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Scalability & Capacity Planning": {
+   "group": "G",
+   "tier": 3,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Framework & Language Migration": {
+   "group": "G",
+   "tier": 4,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "DB Schema & Migrations": {
+   "group": "H",
+   "tier": 4,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Query & DB Performance": {
+   "group": "H",
+   "tier": 3,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Data Integrity & Constraints": {
+   "group": "H",
+   "tier": 4,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Caching Strategy": {
+   "group": "H",
+   "tier": 3,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Concurrency, Locking & Race Conditions": {
+   "group": "H",
+   "tier": 4,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Backups, Retention & Archival": {
+   "group": "H",
+   "tier": 3,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "Search & Indexing (full-text)": {
+   "group": "H",
+   "tier": 2,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "File Storage & Media Handling": {
+   "group": "H",
+   "tier": 2,
+   "reviewers": {
+    "3": [],
+    "4": [
+     "security",
+     "tester"
+    ]
+   }
+  },
+  "3rd-party Integrations & Webhooks": {
+   "group": "I",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "security"
+    ]
+   }
+  },
+  "Background Jobs & Queues": {
+   "group": "I",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "security"
+    ]
+   }
+  },
+  "Real-time (WebSockets, SSE, Push)": {
+   "group": "I",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "security"
+    ]
+   }
+  },
+  "External API Clients & SDK Usage": {
+   "group": "I",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "security"
+    ]
+   }
+  },
+  "Idempotency & Retry Logic": {
+   "group": "I",
+   "tier": 4,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "security"
+    ]
+   }
+  },
+  "AI / LLM Integration": {
+   "group": "I",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa",
+     "security"
+    ]
+   }
+  },
+  "Packages & Libs Updates": {
+   "group": "J",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "CI/CD & Build Pipelines": {
+   "group": "J",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Docker, Containers & Orchestration": {
+   "group": "J",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Infra as Code & Cloud Config": {
+   "group": "J",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Environment & Config Files": {
+   "group": "J",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Release, Versioning & Changelog": {
+   "group": "J",
+   "tier": 1,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Monitoring, Alerts & Health Checks": {
+   "group": "J",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "Feature Flags & Rollouts": {
+   "group": "J",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "security"
+    ],
+    "4": [
+     "security"
+    ]
+   }
+  },
+  "UI Components & Styling": {
+   "group": "K",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "uiux"
+    ],
+    "4": [
+     "uiux",
+     "qa"
+    ]
+   }
+  },
+  "UX Flows & Accessibility": {
+   "group": "K",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "uiux"
+    ],
+    "4": [
+     "uiux",
+     "qa"
+    ]
+   }
+  },
+  "State Management (frontend)": {
+   "group": "K",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "uiux"
+    ],
+    "4": [
+     "uiux",
+     "qa"
+    ]
+   }
+  },
+  "Forms & Client-side Validation": {
+   "group": "K",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "uiux"
+    ],
+    "4": [
+     "uiux",
+     "qa"
+    ]
+   }
+  },
+  "Responsive, RTL & Theming": {
+   "group": "K",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "uiux"
+    ],
+    "4": [
+     "uiux",
+     "qa"
+    ]
+   }
+  },
+  "Frontend Performance": {
+   "group": "K",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "uiux"
+    ],
+    "4": [
+     "uiux",
+     "qa"
+    ]
+   }
+  },
+  "Mobile-specific (iOS, Android, cross-platform)": {
+   "group": "K",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "uiux"
+    ],
+    "4": [
+     "uiux",
+     "qa"
+    ]
+   }
+  },
+  "Work on Document (README, guides)": {
+   "group": "L",
+   "tier": 1,
+   "reviewers": {
+    "3": [],
+    "4": []
+   }
+  },
+  "Code Match Documents (docs vs code drift)": {
+   "group": "L",
+   "tier": 2,
+   "reviewers": {
+    "3": [],
+    "4": []
+   }
+  },
+  "API Docs (OpenAPI / Swagger)": {
+   "group": "L",
+   "tier": 1,
+   "reviewers": {
+    "3": [],
+    "4": []
+   }
+  },
+  "Legal & Marketing Content & Translation": {
+   "group": "L",
+   "tier": 2,
+   "reviewers": {
+    "3": [],
+    "4": []
+   }
+  },
+  "i18n & l10n (strings, locales)": {
+   "group": "L",
+   "tier": 2,
+   "reviewers": {
+    "3": [],
+    "4": []
+   }
+  },
+  "Codebase Exploration & Onboarding": {
+   "group": "L",
+   "tier": 1,
+   "reviewers": {
+    "3": [],
+    "4": []
+   }
+  },
+  "Architecture Decision Records (ADR)": {
+   "group": "L",
+   "tier": 2,
+   "reviewers": {
+    "3": [],
+    "4": []
+   }
+  },
+  "Check MVP vs Advance": {
+   "group": "M",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa"
+    ]
+   }
+  },
+  "Feature Scoping & Requirements": {
+   "group": "M",
+   "tier": 3,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa"
+    ]
+   }
+  },
+  "Analytics & Tracking Events": {
+   "group": "M",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa"
+    ]
+   }
+  },
+  "User Feedback & Bug Triage": {
+   "group": "M",
+   "tier": 1,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa"
+    ]
+   }
+  },
+  "Competitor & Feature Parity Check": {
+   "group": "M",
+   "tier": 2,
+   "reviewers": {
+    "3": [
+     "qa"
+    ],
+    "4": [
+     "qa"
+    ]
+   }
+  }
+ },
+ "change": {
+  "1": [
+   "Work",
+   "Verify"
+  ],
+  "2": [
+   "Read",
+   "Work",
+   "Verify"
+  ],
+  "3": [
+   "Read",
+   "Analyse",
+   "Plan",
+   "Work",
+   "Verify",
+   "Review"
+  ],
+  "4": [
+   "Read",
+   "Analyse",
+   "Plan",
+   "Work",
+   "Verify",
+   "Review"
+  ]
+ },
+ "intents": {
+  "question": [
+   "Read"
+  ],
+  "review": [
+   "Read",
+   "Analyse",
+   "Review"
+  ],
+  "design": [
+   "Read",
+   "Analyse",
+   "Plan"
+  ]
+ },
+ "gate": {
+  "3": "warn",
+  "4": "on"
+ },
+ "verify": {
+  "1": "haiku·low",
+  "2": "sonnet·low",
+  "3": "sonnet·high",
+  "4": "opus·high"
+ }
+}

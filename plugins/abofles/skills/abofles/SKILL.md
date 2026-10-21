@@ -14,7 +14,7 @@ Goal: correct work, fast, fewest tokens. The usual waste is a subagent inheritin
 ## Hard rules
 
 1. Every Agent call passes **both** `model` and `effort`. Never inherit. This skill is the explicit instruction that permits setting `effort`.
-2. Print one route line before each spawn, plain markdown: <Side emoji> `<Side>` → **<Topic>** · <Model> · <Effort> · Cap <N> · <Tier>[ · <Modifier>]. Emoji: 🔍 Read · 🧠 Analyse · 📐 Plan · 🛠️ Work · ✅ Verify · ⚖️ Judge · 💬 Explain. Tier = the word with its dot, never the code: 🟢 Minor (T1) · 🟡 Normal (T2) · 🟠 Sensitive (T3) · 🔴 Critical (T4); `T#` stays in prompt headers. Side = full word; topic = matrix name exactly, Title Case. Modifiers, each after its own ` · `: `Scope −1`, `User: <what>`, `User Cap`, `Project Override`, `Merged: N Questions`, `Parallel`, `Fallback: <Model> Unavailable`. Several route lines: bullets.
+2. Print one route line before each spawn, plain markdown: <Side emoji> `<Side>` → **<Topic>** · <Model> · <Effort> · Cap <N> · <Tier>[ · <Modifier>]. Emoji: 🔍 Read · 🧠 Analyse · 📐 Plan · 🛠️ Work · ✅ Verify · ⚖️ Judge · 💬 Explain; reviewers (Verify cell): 🛡️ Security · 💰 Finance · 📜 Compliance · 🧪 Tester · 🎯 QA · 🎨 UIUX · 🧹 Clean. Tier = the word with its dot, never the code: 🟢 Minor (T1) · 🟡 Normal (T2) · 🟠 Sensitive (T3) · 🔴 Critical (T4); `T#` stays in prompt headers. Side = full word; topic = matrix name exactly, Title Case. Modifiers, each after its own ` · `: `Scope −1`, `User: <what>`, `User Cap`, `Project Override`, `Merged: N Questions`, `Parallel`, `Fallback: <Model> Unavailable`. Several route lines: bullets.
 3. One subagent = one side (Read → Analyse → Plan → Work → Verify, separate small agents; Judge and Explain are the question gate's). Results flow forward as short summaries.
 4. `fable` only on Analyse and Plan. Never for Read, Work or Verify.
 5. `max` effort only through escalation, never as a start value.
@@ -58,8 +58,23 @@ The hook records the answer (`agents: …`) — continue, never re-ask; over bud
 | **Plan** | plans or designs before code changes | `abofles:abofles-planner` |
 | **Work** | writes or edits code, tests, docs, configs | `abofles:abofles-worker` |
 | **Verify** | runs tests, reviews the diff, checks docs vs code | `abofles:abofles-verifier` |
+| **Review** (Verify cell) | one specialist per concern, after Verify passes, in parallel: `Security` · `Finance` · `Compliance` · `Tester` (the only one that edits — test files) · `QA` · `UIUX` (uses the Better Design and UX Pilot connectors when connected) · `Clean` | `abofles:abofles-security` · `-finance` · `-compliance` · `-tester` · `-qa` · `-uiux` · `-cleancoder` |
 
 Every abofles agent opens with `STATUS: done|partial|blocked` and `CONFIDENCE: high|medium|low` (feeds Step 4); its file holds the reply format. **The cell picks the model, not the agent type**: a read `abofles-reader` cannot do (Jira connector, project agent) still takes the Read cell — `general-purpose` at `haiku·low`.
+
+## Step 1½ — Find the workflow
+
+Two inputs: the topic's **tier** (Step 2) and the ask's **intent**. Print one workflow line before the first route line: `🧭 Workflow · <intent> · <Tier> → <steps>`.
+
+| Intent | The ask looks like | Steps |
+|---|---|---|
+| `question` | where is X, what calls Y, how does Z work | Read |
+| `review` | review X, find risks, audit, compare | Read → Analyse → Review |
+| `design` | plan how, design, migration strategy | Read → Analyse → Plan |
+| `change` 🟢 / 🟡 | add, fix, implement, refactor | Work → Verify / Read → Work → Verify |
+| `change` 🟠 / 🔴 | same | Read → Analyse → Plan → Work → Verify → Review |
+
+`Review` = the topic group's specialist reviewers at that tier ([references/workflow.md](references/workflow.md): Money → Finance (+ Security, Tester at 🔴); Security → Security (+ Tester); Frontend → UIUX (+ QA); Business → QA; Quality/Debugging → Tester; Code Health → Clean; PII and audit topics always add Compliance), spawned **in parallel after Verify passes**, each at the tier's Verify cell with the header `abofles: <Topic> / <Tag> · T<tier>`. A reviewer FAIL → Work fixes → re-run that reviewer only. A step you drop (rule 7, or the ask makes it pointless) is fine — say so in the receipt's `workflow` line. On a 🔴 change the Plan's open decisions go through the Judge before Work starts. **Review gate** (hook): a 🔴 change closed without a required reviewer is refused once, naming them; 🟠 gets a 🟠 guide item; `Security skipped: <reason>` in the `workflow` line passes it. Overrides: `Workflow: <Group|Topic> = …`, `Reviewers: <Group|Topic> = …`, `Review: <Tag> / T<tier> = cell`, `Review gate = auto | on | warn | off` ([references/overrides.md](references/overrides.md)).
 
 ## Step 2 — Find the topic and its tier
 
@@ -111,7 +126,7 @@ After a verifier FAIL, re-verify only the failed criterion: [references/spawn-de
 
 Between spawns print only the route line and, for 2+ spawns, a progress line when it changes: `abofles [■■■□□] 3/5 · Plan ✓ · Work ✓ · Work ▶ · Verify · 142 u`
 
-After every task that spawned agents print the receipt as **plain markdown, never in a code block**: the 🧾 header, then bullets `done`, `why`, `check`, `open`, `next` (2+ items → indented sub-bullets). **The hook computes the header** — copy the newest `abofles: Receipt at task end … 🧾 **…**` exactly; `next` is the 🧭 line it hands you. The form (`full | short | savings N | off`) follows its note. `open` lists every `partial`, `blocked`, `low`, `NOTE: ATTENTION` or unresolved FAIL reply, plus anything the user must decide; never close with an ATTENTION unmentioned. Shape and example: [references/receipt-and-example.md](references/receipt-and-example.md).
+After every task that spawned agents print the receipt as **plain markdown, never in a code block**: the 🧾 header, then bullets `done`, `why`, `check`, `workflow` (🟠/🔴 changes: each step and reviewer with ✓, or `<Tag> skipped: <reason>`), `open`, `next` (2+ items → indented sub-bullets). **The hook computes the header** — copy the newest `abofles: Receipt at task end … 🧾 **…**` exactly; `next` is the 🧭 line it hands you. The form (`full | short | savings N | off`) follows its note. `open` lists every `partial`, `blocked`, `low`, `NOTE: ATTENTION` or unresolved FAIL reply, plus anything the user must decide; never close with an ATTENTION unmentioned. Shape and example: [references/receipt-and-example.md](references/receipt-and-example.md).
 
 - **Question gate**: a hook denies every `AskUserQuestion` bar the agent gate until a Judge has seen it; route by the decision's tier, follow the VERDICT (`ANSWERED` → don't ask; `ASK` → ask; `HANDOFF` → Explainer first). Read [references/question-gate.md](references/question-gate.md) first.
 - **Resume block** (`📍 **Resume**`) handed by a hook: print verbatim first, then the prompt; never rebuild it. **Context watch** block from the `Stop` hook: print verbatim as the turn's last output plus one line for the branch that applies (no task open / task open — see memo-resume.md). Memo, Needs-you, guide: [references/memo-resume.md](references/memo-resume.md).

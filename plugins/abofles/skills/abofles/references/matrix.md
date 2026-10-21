@@ -28,6 +28,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 
 ## A. Security & Trust
 
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 Security · 🔴 T4 Security, Tester
+
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | Security & Risk Review | T4 | sonnet·low | **fable·medium** | opus·xhigh | opus·high | opus·high | Analyse=80 | threat model, OWASP, attack surface, vulnerability |
@@ -43,6 +45,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 
 ## B. Money & Finance
 
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 Finance · 🔴 T4 Finance, Security, Tester
+
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
 | 11 | Financial & Amount Calculations | T4 | sonnet·low | **fable·medium** | opus·xhigh | opus·high | opus·high | base | amount, decimal, rounding, currency math, totals, precision |
@@ -57,6 +61,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 
 ## C. Business Logic & Workflows
 
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 QA · 🔴 T4 QA, Tester
+
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
 | 20 | Business Logic (domain rules) | T3 | haiku·medium | opus·medium | opus·medium | sonnet·high | sonnet·high | base | business rule, domain, eligibility, calculation, policy |
@@ -69,6 +75,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 | 27 | Import, Export & Data Migration (business data) | T3 | haiku·medium | opus·medium | opus·medium | sonnet·high | sonnet·high | base | CSV import, bulk upload, ETL, data migration, mapping |
 
 ## D. Quality & Testing
+
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 Tester · 🔴 T4 Tester, QA
 
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
@@ -84,6 +92,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 
 ## E. Debugging & Incidents
 
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 Tester · 🔴 T4 Tester, QA
+
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
 | 37 | Bug Fix & Debugging | T3 | haiku·medium | opus·medium | opus·medium | sonnet·high | sonnet·high | base | bug, stack trace, reproduce, fix, regression |
@@ -94,6 +104,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 | 42 | Data Corruption & Recovery | T4 | sonnet·low | opus·high | opus·xhigh | opus·high | opus·high | base | corrupt data, bad migration, restore, repair script, backfill |
 
 ## F. Code Health
+
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 Clean · 🔴 T4 Clean, Tester
 
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
@@ -109,6 +121,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 
 ## G. Architecture & Design
 
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 — · 🔴 T4 Security
+
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
 | 52 | Architecture, Design Pattern & Stack Used | T4 | sonnet·low | opus·high | **fable·medium** | **sonnet·high** | opus·high | Plan=200 | architecture, layers, pattern, stack choice, structure, clean architecture |
@@ -121,6 +135,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 | 59 | Framework & Language Migration | T4 | sonnet·low | opus·high | opus·xhigh | **sonnet·high** | opus·high | Plan=200 | upgrade framework, migrate from X to Y, rewrite, port, major version |
 
 ## H. Data & Storage
+
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 — · 🔴 T4 Security, Tester
 
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
@@ -135,6 +151,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 
 ## I. Integrations & Async
 
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 QA · 🔴 T4 QA, Security
+
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
 | 68 | 3rd-party Integrations & Webhooks | T3 | haiku·medium | opus·medium | opus·medium | sonnet·high | sonnet·high | base | webhook, callback, integration, partner API, signature verify |
@@ -145,6 +163,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 | 73 | AI / LLM Integration | T2 | haiku·low | **opus·medium** | sonnet·medium | sonnet·medium | sonnet·low | base | prompt, LLM, Claude API, tool use, embeddings, agent loop |
 
 ## J. Dependencies & DevOps
+
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 Security · 🔴 T4 Security
 
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
@@ -159,6 +179,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 
 ## K. Frontend & UX
 
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 UIUX · 🔴 T4 UIUX, QA
+
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
 | 82 | UI Components & Styling | T2 | haiku·low | sonnet·medium | sonnet·medium | sonnet·medium | sonnet·low | base | component, Tailwind, CSS, design system, button, layout |
@@ -171,6 +193,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 
 ## L. Docs & Content
 
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 — · 🔴 T4 —
+
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|
 | 89 | Work on Document (README, guides) | T1 | haiku·low | sonnet·low | sonnet·low | haiku·medium | haiku·low | base | README, guide, how-to, markdown, wiki, write up |
@@ -182,6 +206,8 @@ Never cut a finding to fit a cap. Rank, keep the top ones in full, end with `+N 
 | 95 | Architecture Decision Records (ADR) | T2 | haiku·low | sonnet·medium | sonnet·medium | sonnet·medium | sonnet·low | base | ADR, decision log, why we chose, trade-off record |
 
 ## M. Product & Scope
+
+Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 QA · 🔴 T4 QA
 
 | # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |
 |---|---|---|---|---|---|---|---|---|---|

@@ -7,14 +7,19 @@ Edit TIERS / TOPICS below, then run:
 
 It rewrites the topic index inside skills/abofles/references/topics.md (between
 the `<!-- topics:start -->` / `<!-- topics:end -->` markers) and regenerates
-skills/abofles/references/matrix.md. `--check` writes nothing and exits 1 when
-either file is out of date.
+skills/abofles/references/matrix.md, skills/abofles/references/workflow.md (the
+workflow per intent and tier, the specialist reviewers per group) and
+hooks/workflow.json (the same, for the review gate in the hook). `--check` writes
+nothing and exits 1 when any file is out of date.
 """
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TOPICS_MD = ROOT / "skills/abofles/references/topics.md"
 MATRIX = ROOT / "skills/abofles/references/matrix.md"
+WORKFLOW_MD = ROOT / "skills/abofles/references/workflow.md"
+WORKFLOW_JSON = ROOT / "hooks/workflow.json"
 
 SIDES = ["Read", "Analyse", "Plan", "Work", "Verify"]
 SIDE_NAMES = {
@@ -41,6 +46,59 @@ CAPS = {
     3: dict(Read=60, Analyse=35, Plan=90, Work=30, Verify=35),
     4: dict(Read=100, Analyse=50, Plan=150, Work=40, Verify=60),
 }
+
+# Specialist reviewers: the Verify side split by what each one checks. Cell = the tier's Verify cell unless a
+# project override (`- Review: Security / T4 = opus·xhigh`) says otherwise. key -> (side word, emoji, agent, checks, tools)
+REVIEWERS = {
+    "security": ("Security", "🛡️", "abofles-security", "OWASP top 10, authz and IDOR, secrets, injection, crypto, session handling", "read-only"),
+    "finance": ("Finance", "💰", "abofles-finance", "rounding and precision, currency, ledger invariants, idempotency, double entry, limits", "read-only"),
+    "compliance": ("Compliance", "📜", "abofles-compliance", "PII exposure, consent, retention, audit trail, legal and regulatory text", "read-only"),
+    "tester": ("Tester", "🧪", "abofles-tester", "runs the suite, adds the missing edge-case tests (zero, null, duplicate, concurrent, boundary)", "read + edit tests only"),
+    "qa": ("QA", "🎯", "abofles-qa", "acceptance against the ticket, user flows end to end, regressions, error paths", "read + run"),
+    "uiux": ("UIUX", "🎨", "abofles-uiux", "accessibility, RTL, responsive layout, design tokens, copy; Better Design and UX Pilot connectors when connected", "all tools (connectors)"),
+    "cleancoder": ("Clean", "🧹", "abofles-cleancoder", "naming, duplication, dead code, structure — no behaviour change", "read-only"),
+}
+
+# Reviewers per group and tier (T1/T2: the generic verifier only). The first one is the group's primary reviewer.
+GROUP_REVIEWERS = {
+    "A": {3: ["security"], 4: ["security", "tester"]},
+    "B": {3: ["finance"], 4: ["finance", "security", "tester"]},
+    "C": {3: ["qa"], 4: ["qa", "tester"]},
+    "D": {3: ["tester"], 4: ["tester", "qa"]},
+    "E": {3: ["tester"], 4: ["tester", "qa"]},
+    "F": {3: ["cleancoder"], 4: ["cleancoder", "tester"]},
+    "G": {3: [], 4: ["security"]},
+    "H": {3: [], 4: ["security", "tester"]},
+    "I": {3: ["qa"], 4: ["qa", "security"]},
+    "J": {3: ["security"], 4: ["security"]},
+    "K": {3: ["uiux"], 4: ["uiux", "qa"]},
+    "L": {3: [], 4: []},
+    "M": {3: ["qa"], 4: ["qa"]},
+}
+
+# Reviewers a topic always adds on top of its group's (T3 and T4).
+TOPIC_REVIEWERS = {
+    "Data Privacy, PII & Compliance": ["compliance"],
+    "Audit Logging & Traceability": ["compliance"],
+}
+
+# Workflow = the ordered steps of a task, by intent (what the ask is) and, for a change, by tier. "Review" = the
+# specialist reviewers of the topic's group at that tier, run in parallel after Verify passes. Judge / Explain are
+# not steps: the question gate runs them whenever a step raises an owner question (T4: the Plan's open decisions
+# go through the Judge before Work starts).
+INTENTS = {
+    "question": ("where is X, what calls Y, how does Z work", ["Read"]),
+    "review": ("review X, find risks, audit, compare options", ["Read", "Analyse", "Review"]),
+    "design": ("plan how, design, migration strategy", ["Read", "Analyse", "Plan"]),
+    "change": ("add, fix, implement, refactor — by tier", None),
+}
+CHANGE_WORKFLOWS = {
+    1: ["Work", "Verify"],
+    2: ["Read", "Work", "Verify"],
+    3: ["Read", "Analyse", "Plan", "Work", "Verify", "Review"],
+    4: ["Read", "Analyse", "Plan", "Work", "Verify", "Review"],
+}
+REVIEW_GATE = {3: "warn", 4: "on"}  # default `Review gate = auto`: T4 refuses the receipt once, T3 warns in the guide
 
 # (group letter, group name, [(topic, tier, overrides, signals[, cap overrides]), ...])
 # Numbering is assigned in order, starting at 1.
@@ -340,8 +398,11 @@ def build_matrix():
     total = 0
     for letter, group, rows in numbered():
         total += len(rows)
+        g = GROUP_REVIEWERS.get(letter, {})
         m += [
             f"## {letter}. {group}",
+            "",
+            f"Reviewers (after Verify, see [workflow.md](workflow.md)): 🟠 T3 {rev_names(g.get(3, []))} · 🔴 T4 {rev_names(g.get(4, []))}",
             "",
             "| # | Topic | Tier | Read | Analyse | Plan | Work | Verify | Caps | Signals |",
             "|---|---|---|---|---|---|---|---|---|---|",
@@ -358,6 +419,90 @@ def build_matrix():
     return "\n".join(m)
 
 
+def reviewers_of(letter, topic, tier):
+    """The reviewer keys a topic needs at a tier: its group's list plus the topic's own, in order, no repeats."""
+    if tier < 3:
+        return []
+    out = list(GROUP_REVIEWERS.get(letter, {}).get(tier, []))
+    for k in TOPIC_REVIEWERS.get(topic, []):
+        if k not in out:
+            out.append(k)
+    return out
+
+
+def rev_names(keys):
+    return ", ".join(REVIEWERS[k][0] for k in keys) if keys else "—"
+
+
+def build_workflow_md():
+    m = [
+        "# Workflow and specialist reviewers",
+        "",
+        "Generated by `scripts/gen_matrix.py`. Do not edit by hand. Read when choosing the steps of a task (Step 1½) or the reviewers of a 🟠/🔴 change.",
+        "",
+        "Two inputs pick the workflow: the **topic** gives the tier, the **intent** (what the ask is) gives the shape. Judge and Explain are not steps — the question gate runs them whenever a step raises an owner question; on a 🔴 Critical change the Plan's open decisions go through the Judge before Work starts.",
+        "",
+        "## Intent → steps",
+        "",
+        "| Intent | The ask looks like | Steps |",
+        "|---|---|---|",
+    ]
+    for k, (desc, steps) in INTENTS.items():
+        m.append(f"| `{k}` | {desc} | " + (" → ".join(steps) if steps else "see the table below") + " |")
+    m += ["", "## `change` by tier", "", "| Tier | Steps |", "|---|---|"]
+    tn = {1: "🟢 Minor", 2: "🟡 Normal", 3: "🟠 Sensitive", 4: "🔴 Critical"}
+    for t, steps in CHANGE_WORKFLOWS.items():
+        m.append(f"| {tn[t]} (T{t}) | " + " → ".join(steps) + (" (every reviewer required)" if t == 4 else "") + " |")
+    m += [
+        "",
+        "`Review` = the specialist reviewers of the topic's group at that tier (table below), spawned **in parallel after Verify passes**, each with the tier's Verify cell (model · effort · cap) unless `- Review: <Name> / T<tier> = model·effort` overrides it. A reviewer FAIL → a Work spawn fixes it → re-run **that reviewer only**. 🟢/🟡: the generic verifier alone.",
+        "",
+        "**Review gate** (hook, at the receipt): a 🔴 change closed with a required reviewer missing is refused once, naming the missing reviewers; a 🟠 change gets a 🟠 guide item instead. A reviewer you skip on purpose is named in the receipt's `workflow` line — `Security skipped: <reason>` — and the gate lets it pass. `- Review gate = auto | on | warn | off` (auto = this; on = refuse on T3 too; warn = never refuse; off = silent).",
+        "",
+        "## Reviewers",
+        "",
+        "| Reviewer | Route tag | Agent | Checks | Tools |",
+        "|---|---|---|---|---|",
+    ]
+    for k, (word, emoji, agent, checks, tools) in REVIEWERS.items():
+        m.append(f"| {emoji} {word} | `{word}` | `abofles:{agent}` | {checks} | {tools} |")
+    m += [
+        "",
+        "Route line of a reviewer: `<emoji> `<Tag>` → **<Topic>** · <Model> · <Effort> · Cap <N> · <Tier>` (the Verify cell). Prompt header: `abofles: <Topic> / <Tag> · T<tier>`. Reply format: the verifier's (STATUS, CONFIDENCE, VERDICT, EVIDENCE, ISSUES, NOTE).",
+        "",
+        "## Reviewers per group",
+        "",
+        "| Group | 🟠 T3 | 🔴 T4 |",
+        "|---|---|---|",
+    ]
+    for letter, group, _ in TOPICS:
+        g = GROUP_REVIEWERS.get(letter, {})
+        m.append(f"| {letter}. {group} | {rev_names(g.get(3, []))} | {rev_names(g.get(4, []))} |")
+    m += ["", "Topics that always add a reviewer (T3 and T4): " + "; ".join(f"**{t}** → {rev_names(v)}" for t, v in TOPIC_REVIEWERS.items()) + ".", "",
+          "## Overrides (project `## abofles overrides` block)", "",
+          "- `- Workflow: <Group letter | Group name | Topic> = Read, Work, Verify` — the steps of a `change` on that group or topic (advice to the skill; the hook does not enforce steps).",
+          "- `- Reviewers: <Group letter | Group name | Topic> = security, tester` — replaces the reviewers of that group or topic at T3 and T4 (names as in the table, lower case; `none` = no reviewer).",
+          "- `- Review: <Tag> / T<tier> = model·effort` — the cell of one reviewer at one tier.",
+          "- `- Review gate = auto | on | warn | off`.", ""]
+    return "\n".join(m)
+
+
+def build_workflow_json():
+    topics = {}
+    for letter, group, rows in numbered():
+        for n, topic, tier, ov, sig, capov in rows:
+            topics[topic] = {"group": letter, "tier": tier, "reviewers": {str(t): reviewers_of(letter, topic, t) for t in (3, 4)}}
+    return json.dumps({
+        "reviewers": {k: {"word": v[0], "emoji": v[1], "agent": v[2]} for k, v in REVIEWERS.items()},
+        "groups": {letter: {"name": group, "reviewers": {str(t): GROUP_REVIEWERS.get(letter, {}).get(t, []) for t in (3, 4)}} for letter, group, _ in TOPICS},
+        "topics": topics,
+        "change": {str(t): v for t, v in CHANGE_WORKFLOWS.items()},
+        "intents": {k: v[1] for k, v in INTENTS.items() if v[1]},
+        "gate": {str(t): v for t, v in REVIEW_GATE.items()},
+        "verify": {str(t): TIERS[t]["Verify"] for t in TIERS},
+    }, indent=1, ensure_ascii=False) + "\n"
+
+
 def splice(text, start, end, body):
     i = text.index(start) + len(start)
     j = text.index(end)
@@ -368,15 +513,15 @@ if __name__ == "__main__":
     import sys
 
     new_topics = splice(TOPICS_MD.read_text(), "<!-- topics:start -->", "<!-- topics:end -->", build_index())
-    new_matrix = build_matrix()
+    outputs = ((TOPICS_MD, new_topics), (MATRIX, build_matrix()), (WORKFLOW_MD, build_workflow_md()), (WORKFLOW_JSON, build_workflow_json()))
     if "--check" in sys.argv[1:]:
-        stale = [p.name for p, new in ((TOPICS_MD, new_topics), (MATRIX, new_matrix)) if p.read_text() != new]
+        stale = [p.name for p, new in outputs if not p.exists() or p.read_text() != new]
         if stale:
             print("stale: " + ", ".join(stale) + " (run gen_matrix.py)")
             sys.exit(1)
         print("ok: up to date")
         sys.exit(0)
-    TOPICS_MD.write_text(new_topics)
-    MATRIX.write_text(new_matrix)
+    for p, new in outputs:
+        p.write_text(new)
     count = sum(len(r) for _, _, r in TOPICS)
-    print(f"ok: {count} topics, {len(TOPICS)} groups -> {TOPICS_MD.name}, {MATRIX.name}")
+    print(f"ok: {count} topics, {len(TOPICS)} groups, {len(REVIEWERS)} reviewers -> " + ", ".join(p.name for p, _ in outputs))

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "atlassian": {
+      "type": "http",
+      "url": "https://mcp.atlassian.com/v2/mcp"
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "better-design": {
+      "type": "http",
+      "url": "https://better-design.com/api/mcp"
+    },
+    "ux-pilot": {
+      "type": "http",
+      "url": "https://mcp-server-485825078314.us-central1.run.app/mcp/ui"
+    }
+  }
+}

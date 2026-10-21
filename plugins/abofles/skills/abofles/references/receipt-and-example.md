@@ -16,6 +16,7 @@ At the end of every task that spawned agents, print the receipt as **plain markd
 - `done` → <what changed, one line, files named>
 - `why` → <the reason or rule that drove it, one line>
 - `check` → <the command that proves it → its decisive result>
+- `workflow` → <🟠/🔴 changes only: `Read ✓ · Analyse ✓ · Plan ✓ · Work ✓ · Verify ✓ · Finance ✓ · Security ✓ · Tester skipped: <reason>` — every step and reviewer of the workflow line, done or skipped with its reason; the review gate reads the skipped ones>
 - `open` → <follow-ups — or "none">
 - `next` → 🧭 <the guide line the hook hands you — copy it as given>
 
