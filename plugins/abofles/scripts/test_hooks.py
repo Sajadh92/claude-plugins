@@ -174,6 +174,31 @@ def main():
         check("guard: non-read Bash resets streak", gb("dotnet build") is None and gb("grep x y") is None)
         run("post", agent("haiku", "low", resp=good, cwd=cwd), led)
         check("guard: spawn resets streak", g() is None)
+        # "Main session only" (gate answer, budget 0 this task): the user chose direct reads — no nudge to spawn a Read agent
+        run("start", {"session_id": "gmain", "cwd": cwd}, led)
+        _sp_ = Path(state, "gmain.json"); _stm = json.loads(_sp_.read_text()); _stm.update({"gate": "task", "task_budget": 0}); _sp_.write_text(json.dumps(_stm))
+        check("guard: silent under 'Main session only'", all(g("gmain") is None for _ in range(9)))
+        _stm = json.loads(_sp_.read_text()); _stm.update({"gate": "auto", "task_budget": None}); _sp_.write_text(json.dumps(_stm))
+        _ra = [g("gmain") for _ in range(4)]
+        check("guard: gate back to auto — streak starts fresh (3 silent, 4th warns)", _ra[0] is None and _ra[2] is None and "direct reads in a row" in ctx(_ra[3]))
+        # launcher: hooks.json runs hooks/run.py (bytecode cached); same output as the script
+        LAUNCH = HOOK.parent / "run.py"
+        _rl = subprocess.run([sys.executable, str(LAUNCH), "guard"], input=json.dumps({"session_id": "gmain", "cwd": cwd, "tool_name": "Grep", "tool_input": {}}), capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led))
+        check("launcher: run.py guard exits 0 and is silent like the script", _rl.returncode == 0 and _rl.stdout.strip() == "")
+        _hj = json.loads((HOOK.parent / "hooks.json").read_text())
+        _cmds = [h["command"] for ev in _hj["hooks"].values() for grp in ev for h in grp["hooks"] if h["type"] == "command" and "python3" in h["command"]]
+        check("launcher: every python hook command runs hooks/run.py", _cmds and all("hooks/run.py" in c for c in _cmds))
+        check("launcher: SessionStart text asks for the skill once per session, not per task", "once per session" in _hj["hooks"]["SessionStart"][0]["hooks"][0]["command"] and "start of each task" not in _hj["hooks"]["SessionStart"][0]["hooks"][0]["command"])
+        # prune: state and ledger files untouched for 60 days go at SessionStart; the registry and fresh files stay
+        _old = time.time() - 61 * 86400
+        for _f in (Path(state, "oldsess.json"), Path(led, "oldsess.jsonl"), Path(state, "memo-index.json")):
+            _f.write_text("{}" if _f.suffix == ".json" else "")
+            os.utime(_f, (_old, _old))
+        Path(state, "freshsess.json").write_text("{}")
+        run("start", {"session_id": "prune", "cwd": cwd}, led)
+        check("prune: 61-day-old state and ledger files deleted at SessionStart", not Path(state, "oldsess.json").exists() and not Path(led, "oldsess.jsonl").exists())
+        check("prune: memo-index.json and fresh state files kept", Path(state, "memo-index.json").exists() and Path(state, "freshsess.json").exists())
+        Path(state, "memo-index.json").unlink()
         # Stop receipt enforcement
         run("start", {"session_id": "rc", "cwd": cwd}, led)
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rc"), led)

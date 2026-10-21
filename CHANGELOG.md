@@ -2,6 +2,10 @@
 
 All notable changes to the plugins in this marketplace.
 
+## abofles 1.7.1 — 2026-10-21
+
+- abofles: **cost audit**. Hook commands run through `hooks/run.py`, which imports the hook module so Python caches its bytecode (the script was recompiled on every tool call: ~36 ms → ~24 ms per Read/Bash/Grep/connector call, Edit, prompt and Stop). The direct-read guard is silent while the gate answer is `Main session only` (budget 0 this task) — the user chose direct reads, so "spawn a Read agent" was noise. The skill is invoked **once per session**, not per task (each re-invoke re-inserted ~4K tokens of SKILL.md that was already in context): SessionStart text, skill TRIGGER and the README's `CLAUDE.md` line say so. Session state and ledger files untouched for 60 days are pruned at SessionStart (`other_projects` reads every state file on each Stop); `memo-index.json` and the memos stay.
+
 ## abofles 1.7.0 — 2026-10-21
 
 - abofles: **workflows**. The ask's intent (`question` · `review` · `design` · `change`) and the topic's tier pick the steps of a task — Read / Read → Analyse → Review / Read → Analyse → Plan / by tier for a change (🟢 Work → Verify · 🟡 Read → Work → Verify · 🟠🔴 Read → Analyse → Plan → Work → Verify → Review). The skill prints one `🧭 Workflow · …` line before the first route line; `/abofles:route` prints it too. Judge and Explain stay event-driven (the question gate); on a 🔴 change the Plan's open decisions go through the Judge before Work.

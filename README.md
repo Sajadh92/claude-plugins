@@ -27,6 +27,6 @@ To update by hand instead:
 
 Then restart Claude Code.
 
-Then add to `~/.claude/CLAUDE.md`: `- Always use the abofles skill before spawning subagents, and at the start of each coding task to check the main session model.`
+Then add to `~/.claude/CLAUDE.md`: `- Use the abofles skill once per session, before the first coding task or subagent (never re-invoke it per task: it stays in context), and tier every task with it.`
 
 See [plugins/abofles/README.md](plugins/abofles/README.md) for a quick start, the override block and the full matrix. Changes: [CHANGELOG.md](CHANGELOG.md). License: MIT.

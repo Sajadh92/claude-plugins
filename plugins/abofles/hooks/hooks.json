@@ -5,11 +5,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Abo Fles (ابو فليس) — plugin abofles — is active: in coding work, use the abofles skill at the start of each task and before spawning any subagent. Every Agent call must pass model and effort from the matrix; a hook blocks calls that do not. Commands: /abofles:route <task> (dry run), /abofles:bill (session cost), /abofles:status (follow-ups), /abofles:init (project overrides), /abofles:memo (Now section of the work memo before /compact), /abofles:resume (where was I), /abofles:agents (agent budget), /abofles:guide (what to do next). A context watch warns at 500K/600K/700K/750K/800K/850K/900K tokens at the end of the turn.'"
+            "command": "echo 'Abo Fles (ابو فليس) — plugin abofles — is active: in coding work, invoke the abofles skill once per session, before the first coding task or subagent (it stays in context; do not re-invoke it per task), and tier each task with it. Every Agent call must pass model and effort from the matrix; a hook blocks calls that do not. Commands: /abofles:route <task> (dry run), /abofles:bill (session cost), /abofles:status (follow-ups), /abofles:init (project overrides), /abofles:memo (Now section of the work memo before /compact), /abofles:resume (where was I), /abofles:agents (agent budget), /abofles:guide (what to do next). A context watch warns at 500K/600K/700K/750K/800K/850K/900K tokens at the end of the turn.'"
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" start"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" start"
           }
         ]
       }
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" guard"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" guard"
           }
         ]
       },
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" qgate"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" qgate"
           }
         ]
       },
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" pre"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" pre"
           }
         ]
       }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" prompt"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" prompt"
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" receipt"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" receipt"
           }
         ]
       }
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" stop"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" stop"
           }
         ]
       }
@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" decision"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" decision"
           }
         ]
       },
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" post"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" post"
           }
         ]
       },
@@ -97,7 +97,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" sendmsg"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" sendmsg"
           }
         ]
       },
@@ -106,7 +106,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/abofles_hook.py\" edit"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" edit"
           }
         ]
       }

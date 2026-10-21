@@ -64,7 +64,7 @@ claude plugin install abofles@sajadh92
 Then add one line to `~/.claude/CLAUDE.md` so every session routes before it spawns:
 
 ```
-- Always use the abofles skill before spawning subagents, and at the start of each coding task to check the main session model.
+- Use the abofles skill once per session, before the first coding task or subagent (never re-invoke it per task: it stays in context), and tier every task with it.
 ```
 
 ### Updates

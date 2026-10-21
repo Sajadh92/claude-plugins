@@ -2818,6 +2818,27 @@ def post(data):
     emit("PostToolUse", warnings, rnote)
 
 
+STATE_KEEP_DAYS = 60
+
+
+def prune_state(max_age=STATE_KEEP_DAYS * 86400):
+    """Delete session state and ledger files not touched for 60 days: `other_projects` reads every state file on each Stop,
+    and `/abofles:bill` needs only recent ledgers. The registry (`memo-index.json`) and the memos themselves are kept."""
+    now = time.time()
+    for d, pat in ((STATE_DIR, "*.json"), (LEDGER_DIR, "*.jsonl")):
+        try:
+            for f in d.glob(pat):
+                if f.name == "memo-index.json":
+                    continue
+                try:
+                    if now - f.stat().st_mtime > max_age:
+                        f.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
 def prune_locks(max_age=7 * 86400):
     """Delete `*.lock` files in the state dir and its memo-locks dir not touched for 7 days (one is left behind per session and per project)."""
     now = time.time()
@@ -2896,6 +2917,7 @@ def start(data):
         g = refresh_guide(root, st, sid)
         save_state(sid, st)
     prune_locks()
+    prune_state()
     if en:
         print(en)
     if inote:
@@ -3021,9 +3043,12 @@ def guard(data):
             st["direct_reads"] = st.get("direct_reads", 0) + 1
             n = st["direct_reads"]
             last = st.get("guard_warned_at", 0)
-            threshold = next((t for t in GUARD_MARKS[pace(project_root(data, st))] if n >= t and last < t), None)
-            if threshold:
-                st["guard_warned_at"] = threshold
+            if st.get("gate") == "task" and st.get("task_budget") == 0:  # "Main session only": the user chose direct reads — no nudge, no streak to catch up on later
+                st["direct_reads"], st["guard_warned_at"] = 0, 0
+            else:
+                threshold = next((t for t in GUARD_MARKS[pace(project_root(data, st))] if n >= t and last < t), None)
+                if threshold:
+                    st["guard_warned_at"] = threshold
         save_state(sid, st)
     msgs = []
     if en:
@@ -3410,7 +3435,9 @@ def stop(data):
     # ledger (`warnings`) and are shown by /abofles:bill.
 
 
-if __name__ == "__main__":
+def main():
+    """Dispatch on argv[1]. `hooks/run.py` imports this module and calls it, so Python caches the bytecode
+    in `__pycache__` (a script run directly is recompiled on every call: ~13 ms of a ~38 ms hook)."""
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
         data = read_input() if mode != "tokens" else {}
@@ -3447,3 +3474,7 @@ if __name__ == "__main__":
     except Exception:
         pass
     sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
