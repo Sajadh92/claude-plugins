@@ -11,6 +11,7 @@
     abofles_hook.py decision -- PostToolUse(AskUserQuestion): log the question + answer to the memo; parse the agent-gate answer
     abofles_hook.py qgate    -- PreToolUse(AskUserQuestion): deny a question no Judge/Explainer has seen (a re-ask of the same round passes)
     abofles_hook.py sendmsg  -- PostToolUse(SendMessage): a message to a Judge/Explainer unlocks one question
+    abofles_hook.py edit     -- PostToolUse(Edit|Write|MultiEdit|NotebookEdit): count where edits land; move the memo to the repository most edits go to
     abofles_hook.py tokens   -- CLI: print the context size of the newest session transcript (no stdin)
 
 The context watch runs only in `receipt` (Stop): a passed mark refuses the stop once so the block is the last thing
@@ -397,9 +398,9 @@ def guide_item(p, text, fill, resolve=None, recheck=None, unresolve=None, id="")
     return {"id": id, "p": p, "text": text, "fill": fill, "resolve": resolve, "recheck": recheck, "unresolve": unresolve}
 
 
-def guide_items(root, st, sid):
+def guide_items(root, st, sid, scope=None):
     """The ladder as [(emoji, text)] — the plain form for the CLI, the receipt and the resume block."""
-    return [(i["p"], i["text"]) for i in guide_entries(root, st, sid)]
+    return [(i["p"], i["text"]) for i in guide_entries(root, st, sid, scope=scope)]
 
 
 def context_state(root, st):
@@ -411,7 +412,7 @@ def context_state(root, st):
     return tk, next((m for m in context_marks(root) if m * 1000 > tk), None)
 
 
-def guide_entries(root, st, sid, ctx_state=None):
+def guide_entries(root, st, sid, ctx_state=None, scope=None):
     """The ladder, first match highest: open FAIL/ATTENTION → unasked judged question → owner decisions → unescalated
     partial/low → background running → context/memo hygiene → budget → the memo's Next. Returns guide_item dicts.
     `ctx_state` = a context_state() result the caller already has (one transcript tail read per refresh)."""
@@ -446,9 +447,10 @@ def guide_entries(root, st, sid, ctx_state=None):
     if unlock_live(st, rows, time.time()) and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT:
         items.append(guide_item("🟠", "a judged question is unasked — AskUserQuestion now (QUESTION + WHY in the box, options as cards)",
                                 "abofles: the judged question is still unasked — ask it now with AskUserQuestion.", id="ask"))
-    # 3. owner decisions open in the memo
+    # 3. owner decisions open in the memo (by scope: session = this session's items, all = other projects counted too)
+    scope = scope if scope in SCOPES else resume_scope(root)[0]
     try:
-        need = [l for l in memo_read(root)["Needs you"].splitlines() if "[ ]" in l]
+        need = [l for l in memo_read(root)["Needs you"].splitlines() if "[ ]" in l and (scope != "session" or f"(s:{sid8(sid)})" in l)]
     except Exception:
         need = []
     if need:
@@ -460,6 +462,12 @@ def guide_entries(root, st, sid, ctx_state=None):
                                 f"abofles: owner decision {num} is open: {clip(body, 140).rstrip('.!?')}. Judge it first, then ask me with AskUserQuestion.",
                                 script_cmd("memo.py", "resolve", num, "settled from the guide band", "--trace", "--session", sid) if num else None,
                                 None, script_cmd("memo.py", "reopen", num, "--trace", "--session", sid) if num else None, id=f"dec:{num or '?'}"))
+    if scope == "all":
+        elsewhere = [(n, o) for n, _, _, o, _ in other_projects(root)[0] if o]
+        if elsewhere:
+            tot = sum(o for _, o in elsewhere)
+            items.append(guide_item("🟠", f"{tot} owner decision{'s' if tot > 1 else ''} open in other project{'s' if len(elsewhere) > 1 else ''}: " + ", ".join(f"{n} ({o})" for n, o in elsewhere),
+                                    "abofles: owner decisions are open in other projects — open those sessions to settle them.", id="dec:elsewhere"))
     # 4. a reply of this task that needs Step 4 and got nothing
     for r in rows:
         if r.get("ts", 0) <= started or r.get("resolved") or row_gate(r):
@@ -539,6 +547,17 @@ def main_hint_short(st):
     return f"suggest {label(sm, se)} (now {label(cm, ce) if ce else label(cm)})"
 
 
+def guide_line_of(items):
+    return "🧭 " + " · ".join(f"{i['p']} {i['text']}" for i in items[:3]) + (f" · +{len(items) - 3} more" if len(items) > 3 else "")
+
+
+def guide_line(root, st, sid, scope=None):
+    """The one-line guide for a given scope, computed now (not the stored one): what `memo.py show --scope` prints."""
+    if not guide_on(root):
+        return None
+    return guide_line_of(guide_entries(root, st, sid, scope=scope))
+
+
 def refresh_guide(root, st, sid):
     """Compute the guide, keep it in the state (the band mod reads it there), return its one-line form."""
     if not guide_on(root):
@@ -546,7 +565,7 @@ def refresh_guide(root, st, sid):
         return None
     cs = context_state(root, st)  # one transcript tail read for both the ladder and the band's meter
     items = guide_entries(root, st, sid, cs)
-    line = "🧭 " + " · ".join(f"{i['p']} {i['text']}" for i in items[:3]) + (f" · +{len(items) - 3} more" if len(items) > 3 else "")
+    line = guide_line_of(items)
     tk, nxt = cs
     task = None
     if work_spawns(st):
@@ -570,12 +589,216 @@ NEEDS_RE = re.compile(r"ATTENTION|VERDICT:? ?FAIL|\bFAIL\b|owner|decide|decision
 
 
 def project_root(data=None, st=None):
-    """The directory the session started in — the one memo, overrides and resume use. A `cd` into a worktree or a
-    nested repo must not move the memo (it would land as an untracked file in a team repository)."""
-    root = (st or {}).get("root")
+    """The project the memo, overrides and resume use: the work root when the session's edits moved it (`project`), else
+    the directory the session started in (`root`). A `cd` into a worktree or a nested repo never moves it (the memo would
+    land as an untracked file in a team repository); only edits that land in another repository do (see `edit`)."""
+    st = st or {}
+    root = st.get("project") or st.get("root")
     if root:
         return root
     return (data or {}).get("cwd") or os.getcwd()
+
+
+# ── Work root: the repository the session's edits land in ────────────────────────────────────────────
+WORK_MOVE_MIN = 3  # edits in one other repository before the memo follows them there
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+SCOPES = ("session", "project", "all")
+CONFIG_PATH = Path(os.environ.get("ABOFLES_CONFIG", Path.home() / ".abofles" / "config.json"))
+
+
+def repo_top(path):
+    """The main repository root that holds `path` (realpath), or None outside git. A worktree (`.git` file with
+    `gitdir: <main>/.git/worktrees/<name>`) maps to its main repository, so a worktree never counts as another project."""
+    try:
+        d = Path(os.path.realpath(path))
+        if not d.is_dir():
+            d = d.parent
+        for cand in (d, *d.parents):
+            git = cand / ".git"
+            if git.is_dir():
+                return str(cand)
+            if git.is_file():
+                target = git.read_text().split("gitdir:", 1)[1].strip()
+                tp = Path(target) if os.path.isabs(target) else cand / target
+                tp = os.path.realpath(tp)
+                if "/.git/worktrees/" in tp:
+                    return tp.split("/.git/worktrees/")[0]
+                return str(cand)
+    except Exception:
+        pass
+    return None
+
+
+def work_key(st, path):
+    """Which project an edited path counts for: the launch root for anything under it (nested repos and worktrees
+    included), else the repository the path lives in; None when it is in no repository."""
+    root = os.path.realpath(st.get("root") or "")
+    if not root or not path:
+        return None
+    p = os.path.realpath(path)
+    if p == root or p.startswith(root.rstrip("/") + "/"):
+        return root
+    return repo_top(p)
+
+
+def work_project(st):
+    """The project the edits say: the launch root unless one other repository has WORK_MOVE_MIN+ edits and more of them."""
+    root = os.path.realpath(st.get("root") or "") or None
+    w = st.get("work") or {}
+    if not root:
+        return None
+    rc = w.get(root, 0)
+    best = max((k for k in w if k != root), key=lambda k: w[k], default=None)
+    if best and w[best] >= WORK_MOVE_MIN and w[best] > rc:
+        return best
+    return root
+
+
+def edit(data):
+    """PostToolUse on Edit/Write/MultiEdit/NotebookEdit: count where the session's edits land (subagent edits included —
+    they are this session's work). When another repository holds most of them, the session's memo moves there."""
+    if data.get("tool_name") not in EDIT_TOOLS:
+        return
+    ti = data.get("tool_input") or {}
+    path = ti.get("file_path") or ti.get("notebook_path") or ""
+    sid = data.get("session_id", "")
+    if not path or not sid:
+        return
+    with state_lock(sid):
+        st = load_state(sid)
+        if "started" not in st or not st.get("root"):
+            return
+        key = work_key(st, path)
+        if not key:
+            return
+        w = st.setdefault("work", {})
+        w[key] = w.get(key, 0) + 1
+        old = project_root(data, st)
+        new = work_project(st)
+        if new and os.path.realpath(new) != os.path.realpath(old):
+            memo_move(old, new, sid)
+            if os.path.realpath(new) == os.path.realpath(st.get("root") or ""):
+                st.pop("project", None)
+            else:
+                st["project"] = new
+            refresh_guide(new, st, sid)
+        save_state(sid, st)
+
+
+def renumber(lines):
+    return [re.sub(r"^\d+\.", f"{i}.", l) for i, l in enumerate([l for l in lines if l.strip()], 1)]
+
+
+def memo_move(old, new, session_id, why="most edits of this session land in this repository"):
+    """Move one session's memo from project `old` to project `new`: its session file, its `(s:<id>)` Needs-you items and
+    its index line. The main memo of `old` keeps everything else; a trace line in the session's Journal says it moved."""
+    sid = sid8(session_id)
+    with memo_lock(old), memo_lock(new):
+        s = sess_read(old, session_id)
+        sec_old = memo_read(old) if memo_exists(old) else None
+        moved_need = []
+        if sec_old is not None:
+            keep = []
+            for l in sec_old["Needs you"].splitlines():
+                (moved_need if f"(s:{sid})" in l else keep).append(l)
+            idx = [l for l in sec_old["Sessions"].splitlines() if l.strip() and not l.startswith(f"- [{sid}](")]
+            if moved_need or len(idx) != len([l for l in sec_old["Sessions"].splitlines() if l.strip()]):
+                sec_old["Needs you"] = "\n".join(renumber(keep))
+                sec_old["Sessions"] = "\n".join(idx)
+                memo_write(old, sec_old)
+        try:
+            session_memo_path(old, session_id).unlink()
+        except Exception:
+            pass
+        if not any(s.values()) and not moved_need:
+            return False
+        journal_add(s, f"- {time.strftime('%m-%d %H:%M')} · moved here from {Path(old).name}: {why}")
+        sec_new = memo_read(new)
+        need = [l for l in sec_new["Needs you"].splitlines() if l.strip()] + moved_need
+        sec_new["Needs you"] = "\n".join(renumber(need))
+        memo_touch(new, session_id, s, sec_new)
+    return True
+
+
+def config_read():
+    try:
+        d = json.loads(CONFIG_PATH.read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def config_write(d):
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CONFIG_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, indent=1))
+        os.replace(tmp, CONFIG_PATH)
+        return True
+    except Exception:
+        return False
+
+
+def resume_scope(cwd, flag=None):
+    """What the resume block and the guide show: `session` (this session only), `project` (every session of this
+    project — the default), `all` (this project, then one line per other project). Returns (scope, source)."""
+    for v, src in ((flag, "flag"), (override_value(cwd, "Resume"), "override"), (config_read().get("resume_scope"), "default")):
+        v = (v or "").strip().lower()
+        if v in SCOPES:
+            return v, src
+    return "project", "built-in"
+
+
+def registry_path():
+    return STATE_DIR / "memo-index.json"
+
+
+def registry_read():
+    try:
+        d = json.loads(registry_path().read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def registry_touch(cwd):
+    """`~/.abofles/state/memo-index.json`: every project that has a memo (root → name, memo path, last update), so the
+    `all` scope finds them without a disk scan."""
+    try:
+        reg = registry_read()
+        real = os.path.realpath(cwd or os.getcwd())
+        reg[real] = {"name": Path(real).name, "memo": str(memo_path(real)), "updated": time.strftime("%Y-%m-%d %H:%M")}
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = registry_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(reg, indent=1))
+        os.replace(tmp, registry_path())
+    except Exception:
+        pass
+
+
+def other_projects(cwd, limit=5):
+    """[(name, root, newest index line or '', open Needs-you count, first open item)] of every other registered project with a memo, newest first."""
+    me = os.path.realpath(cwd or os.getcwd())
+    reg = dict(registry_read())
+    try:  # projects whose memo predates the registry: every session state names its root (and work root)
+        for sp in STATE_DIR.glob("*.json"):
+            st = json.loads(sp.read_text())
+            for r in (st.get("root"), st.get("project")):
+                if r and os.path.realpath(r) not in reg and memo_path(r).exists():
+                    reg[os.path.realpath(r)] = {"name": Path(os.path.realpath(r)).name, "memo": str(memo_path(r)), "updated": memo_updated(r) or ""}
+    except Exception:
+        pass
+    out = []
+    for root, info in reg.items():
+        if os.path.realpath(root) == me or not Path((info or {}).get("memo") or memo_path(root)).exists():
+            continue
+        sec = memo_read(root)
+        ent = index_entries(sec)
+        opens = [l for l in sec["Needs you"].splitlines() if "[ ]" in l]
+        first = re.sub(r"\s*\(s:[0-9a-z_-]{1,12}\)\s*$", "", re.sub(r"^\d+\. \[ \] \S+ \S+ · ", "", opens[0].strip())) if opens else ""
+        out.append(((info or {}).get("updated") or memo_updated(root) or "", (info or {}).get("name") or Path(root).name, root, ent[0][1] if ent else "", len(opens), first))
+    out.sort(reverse=True)
+    return [(n, r, l, o, f) for _, n, r, l, o, f in out[:limit]], max(0, len(out) - limit)
 
 
 def memo_path(cwd):
@@ -685,7 +908,7 @@ def memo_write(cwd, sec, session_id=""):
     path = memo_path(cwd)
     stamp = time.strftime("%Y-%m-%d %H:%M")
     head = (f"# Abo Fles memo — {Path(cwd or os.getcwd()).name}\nUpdated: {stamp}" + (f" · session {session_id[:8]}" if session_id else "")
-            + f" · one file per session in [{MEMO_DIR_NAME}/]({MEMO_DIR_NAME}/)\n")
+            + f" · one file per session in [{MEMO_DIR_NAME}/]({MEMO_DIR_NAME}/)\nProject: {os.path.realpath(cwd or os.getcwd())}\n")
     body = "".join(f"\n## {k}\n{sec.get(k, '').strip()}\n" for k in MEMO_SECTIONS)
     try:
         new = not path.exists()
@@ -695,6 +918,7 @@ def memo_write(cwd, sec, session_id=""):
         os.replace(tmp, path)
         if new:
             git_exclude_memo(cwd)
+        registry_touch(cwd)
     except Exception:
         pass
 
@@ -711,7 +935,7 @@ def sess_write(cwd, session_id, sec):
     """Write one session's memo file (atomic). The header links back to the main memo."""
     path = session_memo_path(cwd, session_id)
     head = (f"# Session {sid8(session_id) or 'legacy'} — {Path(cwd or os.getcwd()).name} · [memo](../abofles-memo.md)\n"
-            f"Updated: {time.strftime('%Y-%m-%d %H:%M')}\n")
+            f"Updated: {time.strftime('%Y-%m-%d %H:%M')}\nProject: {os.path.realpath(cwd or os.getcwd())}\n")
     body = "".join(f"\n## {k}\n{sec.get(k, '').strip()}\n" for k in SESSION_SECTIONS)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -848,7 +1072,7 @@ def needs_items(open_line):
     return [clip(x) for x in re.split(r";\s*", open_line) if x.strip() and NEEDS_RE.search(x)]
 
 
-TRACE_RE = re.compile(r"· (resolved|reopened) by hand:")  # a hand-trace journal line is not a receipt: receipt counters skip it
+TRACE_RE = re.compile(r"· ((resolved|reopened) by hand|moved here from \S+):")  # a hand-trace journal line is not a receipt: receipt counters skip it
 
 
 def journal_add(sec, entry):
@@ -1123,11 +1347,15 @@ def now_fields(block):
     return now
 
 
-def resume_block(cwd, away_min=None, session_id="", guide=None):
+def resume_block(cwd, away_min=None, session_id="", guide=None, scope=None, explicit=False):
     """The short block to print after a break, a compact or a new session. None when there is no memo.
-    Built from this session's file (Now, receipts) and the main memo (Needs you, the other sessions' index lines)."""
+    Built from this session's file (Now, receipts) and the main memo (Needs you, the other sessions' index lines).
+    `scope`: session (this session's file and its own Needs-you items), project (default: the other sessions of this
+    project too), all (plus one line per other project). `explicit` = the user asked for the scope (`--scope`): a session
+    with no file yet then sees the other sessions in full instead of a one-line hint."""
     if not memo_exists(cwd):
         return None
+    scope = scope if scope in SCOPES else resume_scope(cwd)[0]
     sec = memo_read(cwd)
     me = sid8(session_id)
     entries = index_entries(sec)
@@ -1135,7 +1363,16 @@ def resume_block(cwd, away_min=None, session_id="", guide=None):
         me = entries[0][0]  # no session given: the newest one
     s = sess_read(cwd, me) if me else {k: "" for k in SESSION_SECTIONS}
     mine = s["Now"] or None
-    others = [(k, l) for k, l in entries if k != me]
+    others = [] if scope == "session" else [(k, l) for k, l in entries if k != me]
+    hint = None
+    if others and mine is None and not explicit and not any(l.strip() for l in s["Journal"].splitlines()):
+        # a session with nothing of its own yet: the other sessions as one hint line — the memo of this folder may not
+        # be this session's project until its first edits say so (the hooks move it then)
+        k0, l0 = others[0]
+        hint = (f"- `project` → {Path(cwd or os.getcwd()).name}: {len(others)} other session{'s' if len(others) > 1 else ''}, newest {k0}"
+                + (f" · task: {clip(index_field(l0, 'task'), 60)}" if index_field(l0, "task") else "")
+                + " — their work, not yours; `/abofles:resume --scope project` shows them")
+        others = []
     now = now_fields(mine)
     written = (now.get("Written") or [None])[0]
     from_receipt = "from receipt" in (written or "")
@@ -1152,13 +1389,16 @@ def resume_block(cwd, away_min=None, session_id="", guide=None):
                 newer = sum(1 for l in jall if re.match(r"- (\d\d-\d\d \d\d:\d\d)", l) and re.match(r"- (\d\d-\d\d \d\d:\d\d)", l).group(1) > written[5:])
         except Exception:
             pass
-    open_items = [l for l in sec["Needs you"].splitlines() if "[ ]" in l]
+    open_items = [l for l in sec["Needs you"].splitlines() if "[ ]" in l and (scope != "session" or f"(s:{me})" in l)]
     journal = [clip(re.sub(r"^- ", "", l), 140) for l in jall[:3]]
     if not journal and others:  # nothing of this session yet: the other sessions' headers, labelled as theirs
         journal = [clip(f"(session {k}, not this one) · " + re.sub(r"^- \[[^\]]+\]\([^)]+\) · ", "", l), 140) for k, l in others[:2]]
-    head = f"📍 **Resume** · memo {memo_updated(cwd) or '?'}" + (f" · away {span(away_min)}" if away_min else "") + (f" · session {me}" if me else "") + age
+    head = (f"📍 **Resume** · memo {memo_updated(cwd) or '?'}" + (f" · away {span(away_min)}" if away_min else "") + (f" · session {me}" if me else "")
+            + (f" · scope {scope}" if scope != "project" else "") + age)
     lines = [head]
     items = lambda k: [i for x in now.get(k, []) if x for i in split_items(x)]
+    if hint:
+        lines.append(hint)
     if mine is None and others:
         lines.append("- `now` → no Now section from this session yet — " + ", ".join(f"session {k} wrote: {clip(index_field(l, 'task') or '?', 70)}" for k, l in others[:3]) + " (their work, not yours)")
     lines += field_lines("now", items("Task"))
@@ -1173,9 +1413,20 @@ def resume_block(cwd, away_min=None, session_id="", guide=None):
         if len(shown) > 1 or more:
             lines += [f"  - {x}" for x in shown] + ([f"  - {more}"] if more else [])
     else:
-        lines.append("- `needs you` → none")
+        lines.append("- `needs you` → none" + (" of this session" if scope == "session" else ""))
     if journal:
         lines += field_lines("last", journal)
+    if scope == "all":
+        rows, more = other_projects(cwd)
+        if rows:
+            lines.append("- `elsewhere` →")
+            for name, root, line, n_open, first_open in rows:
+                bits = [name, clip(index_field(line, "task"), 60) and "task: " + clip(index_field(line, "task"), 60),
+                        clip(index_field(line, "next"), 60) and "next: " + clip(index_field(line, "next"), 60),
+                        (f"{n_open} open: " + clip(first_open, 70) + (" …" if n_open > 1 else "")) if n_open else ""]
+                lines.append("  - " + " · ".join(b for b in bits if b))
+            if more:
+                lines.append(f"  - +{more} more project{'s' if more > 1 else ''}")
     if guide:
         lines.append(f"- `guide` → {guide}")
     return "\n".join(lines)
@@ -1443,6 +1694,40 @@ def explain_printed(transcript_path, offset):
     return False
 
 
+EXPLAIN_ABOVE_RE = re.compile(r"[ \t]*" + EXPLAIN_MARK + r"[^\n]*\b(printed|table|diagram)\b[^\n]*", re.M)  # the `📖 the full table/diagram is printed above this question` line
+EXPLAIN_INLINE_NOTE = ("abofles: the explanation was still not printed above the question — the hook put it inside the question box as plain lines "
+                       "and dropped the `📖 … printed above` line, so the user is not sent to a table that is not there. Next time print the block as reply text first.")
+
+
+def explain_flat(ex, limit=2500):
+    """The explanation as plain lines for the question box: table rows become `a · b · c` (separator rows dropped), fences,
+    bold and inline code marks go, the 📖 heading goes. The box renders no markdown, so this is what stays readable."""
+    out = []
+    for line in (ex or "").splitlines():
+        t = line.strip()
+        if not t or t.startswith("```") or (EXPLAIN_MARK in t and "Explanation for the question" in t):
+            continue
+        if set(t) <= set("|:- ") and "-" in t:
+            continue  # a table separator row
+        if t.startswith("|") or t.endswith("|"):
+            t = " · ".join(c.strip() for c in t.strip("|").split("|") if c.strip())
+        t = re.sub(r"\*\*|`", "", t)
+        out.append(t)
+    return explain_cut("\n".join(out), limit)
+
+
+def explain_inline(ti, ex):
+    """The AskUserQuestion input with the explanation inside the first question's text and the `📖 … printed above` line
+    removed from every question: the hook's fallback when the model asked twice without printing the block above."""
+    qs = [dict(q or {}) for q in ti.get("questions") or []]
+    for i, q in enumerate(qs):
+        t = EXPLAIN_ABOVE_RE.sub("", q.get("question") or "").rstrip()
+        if i == 0 and ex:
+            t += f"\n\n{EXPLAIN_MARK} Explanation:\n{explain_flat(ex)}"
+        q["question"] = t
+    return dict(ti, questions=qs)
+
+
 EXPLAIN_MISSING = ("abofles: the question's explanation is not printed — the user would see the question without the table it points to. "
                    "Print this block verbatim now as reply text, then call AskUserQuestion again in the same message (same question, same options):\n\n")
 
@@ -1540,6 +1825,11 @@ def qgate(data):
         if ok > 0 or reask:
             if ok > 0:
                 st["judge_ok"] = ok - 1
+            inline_ex = ""  # refused once already and still not printed: the explanation goes inside the box (never a third ask without it)
+            if st.get("explain_md") and st.get("explain_text") and not explain_printed(tp, st.get("explain_offset", 0)):
+                inline_ex = st["explain_text"]
+            elif reask and prev.get("text") and (time.time() - prev.get("ts", 0)) < REASK_WINDOW and not explain_printed(tp, prev.get("offset", 0)):
+                inline_ex = prev["text"]
             if st.get("explain_md") and st.get("explain_text"):  # kept for a re-ask of this round (see above)
                 st["explain_prev"] = {"text": st["explain_text"], "ts": int(time.time()), "offset": transcript_size(tp), "denies": 0}
             elif st.get("explain_prev"):
@@ -1549,6 +1839,8 @@ def qgate(data):
             st["last_ask_ts"] = int(time.time())
             st["asked"] = (asked + [question_line(q) for q in qlist])[-12:]
             save_state(sid, st)
+            if inline_ex:
+                allow_updated(explain_inline(ti, inline_ex), EXPLAIN_INLINE_NOTE)
             return
         save_state(sid, st)
     deny(question_gate_text(st, question_language(project_root(data, st))))
@@ -1936,6 +2228,19 @@ def deny(reason):
             "permissionDecisionReason": reason,
         }
     }))
+    sys.exit(0)
+
+
+def allow_updated(tool_input, reason):
+    """Allow the call with its input replaced (`updatedInput` replaces the whole object; AskUserQuestion needs `allow` with it)."""
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": reason,
+            "updatedInput": tool_input,
+        }
+    }, ensure_ascii=False))
     sys.exit(0)
 
 
@@ -2545,6 +2850,8 @@ def start(data):
         remember_transcript(data, st)
         if data.get("cwd") and (not st.get("root") or src in ("startup", "clear")):
             st["root"] = data["cwd"]  # the project root for memo and overrides: fixed here, never moved by a later `cd`
+            st.pop("project", None)  # only this session's edits can move it (see `edit`)
+            st.pop("work", None)
         refresh_main_model(data, st)
         en = effort_note(data, st)
         inote = install_note_once(st)
@@ -2605,12 +2912,12 @@ def newest_state_path(cwd=None, session=None):
             raw = st.get("root") or st.get("cwd") or ""
             if not raw:
                 continue
-            root = os.path.realpath(raw)
             key = (float(st.get("last_prompt_ts") or 0), sp.stat().st_mtime)
-            if want == root:
-                exact.append((key, sp))
-            elif want.startswith(root.rstrip("/") + "/"):
-                inside.append((key, sp))  # a command run from a subfolder of the project (after a `cd`) still belongs to that session
+            for root in {os.path.realpath(raw), os.path.realpath(st.get("project") or raw)}:  # the launch root, or the work root the memo moved to
+                if want == root:
+                    exact.append((key, sp))
+                elif want.startswith(root.rstrip("/") + "/"):
+                    inside.append((key, sp))  # a command run from a subfolder of the project (after a `cd`) still belongs to that session
         except Exception:
             continue
     pick = exact or inside
@@ -2767,6 +3074,8 @@ def receipt(data):
         live = unlock_live(st, ledger_rows(sid), time.time())  # an unlock from an earlier task, or an old one nobody is replying to, is dropped below
         unasked = (live and not data.get("stop_hook_active") and not background_running(sid)
                    and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT)  # before reset_task clears the unlock; not while a gate agent is still replying
+        spent = (live and bool(data.get("stop_hook_active")) and not background_running(sid)
+                 and (time.time() - st.get("gate_wait_ts", 0)) > GATE_WAIT)  # this turn's first Stop demanded the question and the model ended the turn without asking (it answered instead): one demand per unlock, never a second turn
         ok_before = st.get("judge_ok", 0)  # reset_task below zeroes it
         unasked_md = bool(st.get("explain_md"))
         ex_keep = {k: st[k] for k in EXPLAIN_KEYS if k in st}  # reset_task clears the explain state; an unlock that survives it keeps its own
@@ -2786,12 +3095,15 @@ def receipt(data):
                 reasons.append(f"abofles: {pending} agent(s) spawned, no receipt{' (still owed from the last turn)' if owed else ''}. Print it now.\n" + instruction.removeprefix("abofles: "))
         elif not pending and st.get("gate") == "task" and not st.get("task_budget"):
             st["gate"], st["task_budget"], st["task_parallel"] = None, None, None  # "Main session only" was for that turn's task
-        if live and not unasked:
+        if live and not unasked and not spent:
             keep_unlock = ok_before  # a gate agent is still replying: the unlock survives the task reset below
         else:
             keep_unlock = 0
-            if not live:
-                st["judge_ok"] = 0  # stale: made before the task began, or too old and no gate agent running
+            if not live or spent:
+                st["judge_ok"] = 0  # stale: made before the task began, too old with no gate agent running, or demanded once and not asked
+                if spent:
+                    for k in EXPLAIN_KEYS:
+                        st.pop(k, None)
         if unasked:
             st["judge_ok"] = max(st.get("judge_ok", 0), 1)  # keep the unlock alive for the question that must follow
             st.update(ex_keep)
@@ -2808,8 +3120,8 @@ def receipt(data):
         cw = context_watch(data, st)
         if cw:
             reasons.append(cw)
-        if st.get("receipt_owed"):
-            refresh_guide(root, st, sid)  # the "receipt owed" item was just raised
+        if st.get("receipt_owed") or spent:
+            refresh_guide(root, st, sid)  # the "receipt owed" item was just raised, or the spent unlock's "ask" item must go
         save_state(sid, st)
     if rc:
         memo_journal(root, sid, rc)
@@ -3016,6 +3328,8 @@ if __name__ == "__main__":
             qgate(data)
         elif mode == "sendmsg":
             sendmsg(data)
+        elif mode == "edit":
+            edit(data)
         elif mode == "tokens":
             p = newest_transcript()
             t = context_tokens(str(p)) if p else None

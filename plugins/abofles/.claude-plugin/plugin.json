@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "abofles",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Abo Fles (ابو فليس) — the stingy one who counts every token. Routes every subagent to the right model (haiku/sonnet/opus/fable) and effort (low..max) from a topic x side matrix, caps how many agents a task may spawn, judges every question before it reaches the user, prints a receipt with real tokens and dollars, and keeps a work memo so nothing is read twice.",
   "author": {
     "name": "Sajadh92"

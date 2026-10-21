@@ -47,6 +47,7 @@ def main():
         os.environ["ABOFLES_STATE_DIR"] = state
         os.environ["ABOFLES_TEST_CWD"] = cwd
         os.environ["ABOFLES_USER_CLAUDE_MD"] = str(Path(state, "no-user-claude.md"))
+        os.environ["ABOFLES_CONFIG"] = str(Path(state, "config.json"))
         os.environ.pop("ABOFLES_RECEIPT", None)
         Path(cwd, "src").mkdir(); Path(cwd, "src/a.cs").write_text("x\n" * 30)
         def pin(sid=None):  # the scripts pick the session for a command: ABOFLES_SESSION, else the newest prompt among this folder's sessions
@@ -54,6 +55,9 @@ def main():
             if sid: os.environ["ABOFLES_SESSION"] = sid
         pin()
         reason = lambda out: (out or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+        import importlib.util as _iu0
+        _hs0 = _iu0.spec_from_file_location("abofles_hook_t0", str(HOOK)); _H0 = _iu0.module_from_spec(_hs0); _hs0.loader.exec_module(_H0)
+        H_flat = _H0.explain_flat
         allowed = lambda out: out is None or (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "allow"  # the first spawn of a task may carry the `main:` line
         ctx = lambda out: (out or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
         # post output minus the receipt note it always carries
@@ -588,7 +592,18 @@ def main():
         check("explain: re-ask with the explanation printed again passes", run("qgate", exq, led) is None)
         out = run("post", dict(jp(2, table_ask), session_id="ex", transcript_path=str(tr)), led)
         r1 = run("qgate", exq, led)
-        check("explain: a second miss goes through (one refusal per question, never a loop)", "not printed" in reason(r1) and run("qgate", exq, led) is None)
+        r2 = run("qgate", exq, led)
+        upd = ((r2 or {}).get("hookSpecificOutput") or {}).get("updatedInput") or {}
+        q2 = ((upd.get("questions") or [{}])[0]).get("question", "")
+        check("explain: a second miss goes through with the explanation put inside the box and the 'printed above' line dropped (never a loop, never a lie)",
+              "not printed" in reason(r1) and (r2 or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "allow" and "inside the question box" in reason(r2)
+              and q2.startswith("Cap per unit or per order?") and "printed above" not in q2 and "📖 Explanation:\noption · effect\nPer unit · capped\nPer order · uncapped" in q2
+              and upd.get("questions")[0].get("options") == [])
+        check("explain: flat text drops fences, separators, bold and code marks; the 📖 line regex spares other lines",
+              H_flat("```md\n| **a** | `b` |\n|---|---|\n| 1 | 2 |\n```\n📖 **Explanation for the question below**\nkeep → this") == "a · b\n1 · 2\nkeep → this")
+        out = run("post", dict(jp(2, table_ask), session_id="ex", transcript_path=str(tr)), led)
+        say("text", "📖 **Explanation for the question below**\n\n| option | effect |\n|---|---|\n| Per unit | capped |")
+        check("explain: printed after the judge -> plain allow, input untouched", run("qgate", exq, led) is None)
         out = run("post", dict(jp(2, ask), session_id="ex", transcript_path=str(tr)), led)
         check("explain: plain EXPLAIN -> inside-the-question instruction, no gate", "plain lines" in ctx(out) and run("qgate", exq, led) is None)
         # 6d. Stop: a judged, unasked question blocks the turn end once
@@ -599,6 +614,11 @@ def main():
         check("stop: judged question unasked -> turn end refused once", (out or {}).get("decision") == "block" and "judged question is still unasked" in out.get("reason", ""))
         out = run("receipt", {"session_id": "ju", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": True, "last_assistant_message": "x"}, led)
         check("stop: second stop passes", out is None or "judged question" not in (out or {}).get("reason", ""))
+        check("stop: the unlock is spent by that one demand — judge_ok cleared, no 'ask' item left", json.loads(Path(state, "ju.json").read_text()).get("judge_ok") == 0
+              and "ask" not in [i.get("id") for i in (json.loads(Path(state, "ju.json").read_text()).get("guide") or {}).get("items") or []])
+        out = run("receipt", {"session_id": "ju", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "next turn"}, led)
+        check("stop: the next turn is not asked again (no demand a day later)", "judged question" not in (out or {}).get("reason", ""))
+        check("qgate: a spent unlock lets no question through", "question gate" in reason(run("qgate", {"session_id": "ju", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "spent?", "options": []}]}}, led)))
         # 7. missing abofles header -> warned
         out = run("post", dict(agent("haiku", "low", prompt="find the cap\nLine cap: 40", resp=good, cwd=cwd), session_id="bb"), led)
         check("budget: missing header warned", "tier unknown" in ctx(out))
@@ -684,7 +704,7 @@ def main():
         pin()
         run("start", {"session_id": "msC", "cwd": cwd, "transcript_path": str(tr)}, led)
         blkC = run("start", {"session_id": "msC", "cwd": cwd, "transcript_path": str(tr)}, led)
-        check("multi: a new session is told the Now blocks belong to other sessions", "no Now section from this session yet" in blkC and "their work, not yours" in blkC and "session ms" in blkC)
+        check("multi: a new session is told the Now blocks belong to other sessions (one hint line by default)", "- `project` → " in blkC and re.search(r"\d+ other sessions?, newest \w+", blkC) and "their work, not yours" in blkC and "no Now section" not in blkC)
         # 13. guide: the ladder, the receipt line, the resume line, the CLI
         run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr)}, led)
         json.dump(dict(json.loads(Path(state, "gu.json").read_text()), gate="auto"), open(Path(state, "gu.json"), "w"))
@@ -967,9 +987,10 @@ def main():
               "Task      none — between tasks" in f1["Now"] and "Session " not in f1["Now"] and f1["Journal"].splitlines() == ["- 10-14 14:30 · 2 Spawns · $0.88 vs Opus 5.5 · done: band fixes", "- 10-12 09:00 · 1 Spawn · $0.05 vs Opus 5.5 · done: untagged line"]
               and "Task      cap ticket" in f2["Now"] and f2["Journal"] == "- 10-13 10:05 · 1 Spawn · $0.10 vs Opus 5.5 · done: capped")
         rb1 = H.resume_block(pm, session_id="oldsess1-full-id")
-        rb3 = H.resume_block(pm, session_id="newsess99")
+        rb3 = H.resume_block(pm, session_id="newsess99", scope="project", explicit=True)
         check("migrate: the resume block reads the split files", "- `now` → none — between tasks" in rb1 and "- `next` → band buttons not pressed" in rb1 and "band fixes" in rb1 and "capped" not in rb1
               and "no Now section from this session yet" in rb3 and "session oldsess1 wrote: none — between tasks" in rb3 and "(session oldsess1, not this one)" in rb3)
+        check("migrate: a new session gets the hint line by default", "2 other sessions, newest oldsess1" in H.resume_block(pm, session_id="newsess99"))
         H.memo_journal(pm, "oldsess2", H.parse_receipt("🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → more cap\n- `check` → ok"))
         check("migrate: a later receipt lands in its session file and moves that session to the top of the index", H.memo_read(pm)["Sessions"].startswith("- [oldsess2](") and "receipts: 2" in H.memo_read(pm)["Sessions"].splitlines()[0] and "more cap" in H.sess_read(pm, "oldsess2")["Journal"] and "more cap" not in H.sess_read(pm, "oldsess1")["Journal"])
         # 5. memo_resolve / memo_reopen pass the session on
@@ -1382,6 +1403,127 @@ def main():
         check("exit: memo resolve of a resolved item exits 3, writes no trace", m2.returncode == 3 and memd("mysess").read_text().count("by hand:") == n_)
         check("exit: memo resolve of a missing item exits 1", me_("resolve", "9").returncode == 1 and me_("reopen", "9").returncode == 1)
         check("exit: memo reopen exits 0 with the given session", me_("reopen", "1", "--trace", "--session", "other").returncode == 0 and "· reopened by hand" in memd("other").read_text())
+
+    # ── 1.6.0: work root (the memo follows the session's edits), memo move, resume/guide scopes, registry ──
+    with tempfile.TemporaryDirectory() as wh:
+        os.environ["ABOFLES_STATE_DIR"] = str(Path(wh, "st")); os.environ["ABOFLES_CONFIG"] = str(Path(wh, "config.json"))
+        os.environ.pop("ABOFLES_SESSION", None)
+        import importlib.util as _iu2
+        _hs2 = _iu2.spec_from_file_location("abofles_hook_wr", str(HOOK)); W = _iu2.module_from_spec(_hs2); _hs2.loader.exec_module(W)
+        led2 = str(Path(wh, "led")); Path(led2).mkdir()
+        A, B, C, D = (Path(wh, n) for n in "ABCD")
+        for d in (A, B, C, D):
+            d.mkdir()
+        gitok = all(subprocess.run(["git", "init", "-q"], cwd=d, capture_output=True).returncode == 0 for d in (B, C))
+        wst = lambda sid_: json.loads(Path(wh, "st", f"{sid_}.json").read_text())
+        ed = lambda sid_, path, tool="Edit": run("edit", {"session_id": sid_, "cwd": str(A), "tool_name": tool, "tool_input": {"file_path": str(path)}}, led2)
+        RCM = "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → moved thing\n- `check` → ok\n- `open` → owner decision: keep the banner wide or narrow"
+        run("start", {"session_id": "mv1", "cwd": str(A)}, led2)
+        run("receipt", {"session_id": "mv1", "cwd": str(A), "stop_hook_active": False, "last_assistant_message": RCM}, led2)
+        memA, memB = W.memo_path(str(A)), W.memo_path(str(B))
+        check("work: a receipt lands in the launch folder before any edit", memA.exists() and "(s:mv1)" in memA.read_text() and W.session_memo_path(str(A), "mv1").exists())
+        check("work: the memo headers carry the project path", f"Project: {os.path.realpath(A)}" in memA.read_text() and f"Project: {os.path.realpath(A)}" in W.session_memo_path(str(A), "mv1").read_text())
+        ed("mv1", A / "x.txt")
+        ed("mv1", B / "b1.py"); ed("mv1", B / "b2.py", "Write")
+        check("work: edits are counted per repository (1 in the launch folder, 2 in B), under 3 nothing moves",
+              wst("mv1").get("work", {}).get(os.path.realpath(A)) == 1 and wst("mv1").get("work", {}).get(os.path.realpath(B)) == 2 and not wst("mv1").get("project") and memA.exists() and not memB.exists())
+        ed("mv1", B / "b3.py")
+        sB = W.session_memo_path(str(B), "mv1")
+        check("work: the third edit in B (more than in A) moves the session's memo to B", wst("mv1").get("project") == os.path.realpath(B) and sB.exists() and memB.exists())
+        check("work: the session file moved with its Now, Journal and a 'moved here' trace line",
+              "moved thing" in sB.read_text() and "moved here from A: most edits of this session land in this repository" in sB.read_text() and not W.session_memo_path(str(A), "mv1").exists())
+        check("work: its Needs-you item moved and was renumbered; A's index line is gone", "1. [ ]" in W.memo_read(str(B))["Needs you"] and "(s:mv1)" in memB.read_text()
+              and "(s:mv1)" not in memA.read_text() and not any(k == "mv1" for k, _ in W.index_entries(W.memo_read(str(A)))) and any(k == "mv1" for k, _ in W.index_entries(W.memo_read(str(B)))))
+        check("work: a trace line is not a receipt", W.index_field([l for k, l in W.index_entries(W.memo_read(str(B))) if k == "mv1"][0], "receipts") == "1")
+        run("receipt", {"session_id": "mv1", "cwd": str(A), "stop_hook_active": False, "last_assistant_message": RCM.replace("moved thing", "second thing")}, led2)
+        check("work: a later receipt (hook cwd still A) journals into B", "second thing" in sB.read_text() and "second thing" not in memA.read_text())
+        check("work: scripts find the session from the work root too", (W.newest_state_path(str(B)) or Path("x")).stem == "mv1" and (W.newest_state_path(str(A)) or Path("x")).stem == "mv1")
+        check("work: registry lists both projects", set(map(os.path.realpath, W.registry_read())) >= {os.path.realpath(A), os.path.realpath(B)})
+        # edits under the launch root (nested repo, worktree of it) and in a worktree of B count for A / B, never a third project
+        nested = A / "nested"; nested.mkdir(); subprocess.run(["git", "init", "-q"], cwd=nested, capture_output=True)
+        run("start", {"session_id": "mv2", "cwd": str(A)}, led2)
+        ed("mv2", nested / "n.txt"); ed("mv2", nested / "n2.txt"); ed("mv2", nested / "n3.txt"); ed("mv2", nested / "n4.txt")
+        check("work: a nested repo inside the launch folder counts as the launch folder", wst("mv2").get("work", {}).get(os.path.realpath(A)) == 4 and not wst("mv2").get("project"))
+        if gitok and subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "i"], cwd=C, capture_output=True).returncode == 0 \
+                and subprocess.run(["git", "worktree", "add", "-q", str(Path(wh, "Cwt"))], cwd=C, capture_output=True).returncode == 0:
+            check("work: a file in a worktree maps to its main repository", W.repo_top(str(Path(wh, "Cwt", "f.txt"))) == os.path.realpath(C))
+        check("work: a file in no repository counts for nothing", W.work_key({"root": str(A)}, str(D / "d.txt")) is None and W.repo_top(str(D / "d.txt")) is None)
+        # a tie never moves; a majority elsewhere does, and the memo can move again when the count turns
+        run("start", {"session_id": "mv3", "cwd": str(B)}, led2)
+        for n in range(3):
+            run("edit", {"session_id": "mv3", "cwd": str(B), "tool_name": "Edit", "tool_input": {"file_path": str(C / f"c{n}.py")}}, led2)
+            run("edit", {"session_id": "mv3", "cwd": str(B), "tool_name": "Edit", "tool_input": {"file_path": str(B / f"b{n}.py")}}, led2)
+        check("work: a tie keeps the launch folder", not wst("mv3").get("project"))
+        run("edit", {"session_id": "mv3", "cwd": str(B), "tool_name": "Edit", "tool_input": {"file_path": str(C / "c9.py")}}, led2)
+        check("work: one more edit in C (4 vs 3) moves the project to C", wst("mv3").get("project") == os.path.realpath(C))
+        for n in range(2):
+            run("edit", {"session_id": "mv3", "cwd": str(B), "tool_name": "Edit", "tool_input": {"file_path": str(B / f"bb{n}.py")}}, led2)
+        check("work: back to the launch folder when it leads again (5 vs 4)", not wst("mv3").get("project"))
+        check("work: a hook with no file_path or an unknown tool changes nothing", run("edit", {"session_id": "mv3", "cwd": str(B), "tool_name": "Edit", "tool_input": {}}, led2) is None
+              and run("edit", {"session_id": "mv3", "cwd": str(B), "tool_name": "Read", "tool_input": {"file_path": str(C / "z.py")}}, led2) is None and wst("mv3")["work"].get(os.path.realpath(C)) == 4)
+        run("start", {"session_id": "mv3", "cwd": str(B), "source": "clear"}, led2)
+        check("work: /clear or a new session starts the count again", "work" not in wst("mv3") and "project" not in wst("mv3"))
+        # scopes: session / project (default) / all; a session with nothing of its own sees a hint line
+        run("start", {"session_id": "oth1", "cwd": str(B)}, led2)
+        run("receipt", {"session_id": "oth1", "cwd": str(B), "stop_hook_active": False, "last_assistant_message": RCM.replace("moved thing", "other thing").replace("keep the banner wide or narrow", "ship the footer today or next week")}, led2)
+        rb_p = W.resume_block(str(B), session_id="mv1")
+        rb_s = W.resume_block(str(B), session_id="mv1", scope="session")
+        check("scope: project (default) shows every open item of the project", "2 open" in rb_p and "(s:oth1)" in rb_p and "(s:mv1)" in rb_p and "· scope" not in rb_p)
+        check("scope: session shows only this session's items and says so in the header", "· scope session" in rb_s and "1 open" in rb_s and "(s:oth1)" not in rb_s and "(s:mv1)" in rb_s)
+        rb_n = W.resume_block(str(B), session_id="newS1")
+        check("scope: a session with nothing of its own gets one hint line instead of the other sessions' lines",
+              "- `project` → B: 2 other sessions, newest " in rb_n and "their work, not yours; `/abofles:resume --scope project` shows them" in rb_n and "not this one" not in rb_n and "- `now` →" not in rb_n)
+        rb_nx = W.resume_block(str(B), session_id="newS1", scope="project", explicit=True)
+        check("scope: --scope project (explicit) shows the other sessions in full", "not this one" in rb_nx and "- `project` →" not in rb_nx)
+        check("scope: session for a session with nothing of its own shows none", "- `needs you` → none of this session" in W.resume_block(str(B), session_id="newS1", scope="session"))
+        W.memo_needs(str(A), "zz", "owner decision: A keeps this one")
+        rb_a = W.resume_block(str(B), session_id="mv1", scope="all")
+        check("scope: all adds one `elsewhere` line per other project with its open count", "· scope all" in rb_a and "- `elsewhere` →" in rb_a and re.search(r"^  - A · 1 open: owner decision: A keeps this one$", rb_a, re.M) and "  - B" not in rb_a and "  - C" not in rb_a)
+        check("scope: precedence built-in < saved default < override < flag",
+              W.resume_scope(str(B)) == ("project", "built-in") and W.config_write({"resume_scope": "all"}) and W.resume_scope(str(B)) == ("all", "default")
+              and (Path(B, "CLAUDE.md").write_text("## abofles overrides\n- Resume = session\n") or True) and W.resume_scope(str(B)) == ("session", "override")
+              and W.resume_scope(str(B), "project") == ("project", "flag") and W.resume_scope(str(B), "bogus") == ("session", "override"))
+        check("scope: the override drives the default block", "· scope session" in W.resume_block(str(B), session_id="mv1"))
+        Path(B, "CLAUDE.md").unlink(); W.config_write({})
+        st1 = wst("mv1")
+        gi = lambda sc: " | ".join(t for _, t in W.guide_items(str(B), st1, "mv1", scope=sc))
+        check("scope: the guide counts owner decisions by scope", "1 owner decision open" in gi("session") and "2 owner decisions open" in gi("project") and "2 owner decisions open" in gi("all")
+              and "open in other project: A (1)" in gi("all") and "other project" not in gi("project"))
+        # memo.py: --scope, scope <value>, and no write without a session state
+        sdir2 = Path(__file__).resolve().parent
+        env2 = dict(os.environ, ABOFLES_LEDGER_DIR=led2, ABOFLES_SESSION="mv1")
+        mp = lambda *a, cwd=B, env=env2: subprocess.run([sys.executable, str(sdir2 / "memo.py"), *a], cwd=cwd, capture_output=True, text=True, env=env)
+        check("memo.py: show --scope session prints the session-scoped block", "· scope session" in mp("show", "--scope", "session").stdout)
+        check("memo.py: show --scope all prints the elsewhere lines with each project's first open item", re.search(r"^  - A · 1 open: owner decision: A keeps this one$", mp("show", "--scope", "all").stdout, re.M) is not None)
+        rs, rp, ra = (mp("show", "--scope", x).stdout for x in ("session", "project", "all"))
+        check("memo.py: the guide line of the block follows the scope too (session: own decision only; project: both; all: other projects counted)",
+              "🟠 1 owner decision open" in rs.split("- `guide`")[1] and "(s:oth1)" not in rs and "🟠 2 owner decisions open" in rp.split("- `guide`")[1] and "open in other project: A (1)" in ra.split("- `guide`")[1] and "other project" not in rp)
+        check("memo.py: an unknown --scope exits 2", mp("show", "--scope", "bogus").returncode == 2)
+        r = mp("scope", "all")
+        check("memo.py: scope <value> saves the user default", r.returncode == 0 and r.stdout.strip() == "saved as the default · scope: all (from the saved default (" + str(Path(wh, "config.json")) + "))" and json.loads(Path(wh, "config.json").read_text())["resume_scope"] == "all")
+        check("memo.py: scope alone prints the scope in force and its source", mp("scope").stdout.startswith("scope: all (from the saved default"))
+        check("memo.py: the saved default drives show", "· scope all" in mp("show").stdout and "· scope" not in mp("show", "--scope", "project").stdout)
+        W.config_write({})
+        env3 = dict(os.environ, ABOFLES_LEDGER_DIR=led2); env3.pop("ABOFLES_SESSION", None)
+        r = mp("resolve", "1", "x", cwd=D, env=env3)
+        check("memo.py: a write with no session state, no --session and no memo in the folder exits 4 and writes nothing", r.returncode == 4 and "nothing written" in r.stdout and not Path(D, ".claude").exists())
+        check("memo.py: naming a session allows the write (two sessions in one root)", mp("note", "named", "--session", "d1", cwd=D, env=env3).returncode == 0 and Path(D, ".claude", "abofles-memo.md").exists())
+        import shutil; shutil.rmtree(Path(D, ".claude"))
+        r = mp("now", cwd=D, env=env3)
+        check("memo.py: now with no session state exits 4 too", r.returncode == 4 and not Path(D, ".claude").exists())
+        check("memo.py: show with no session state still reads", mp("show", cwd=D, env=env3).returncode == 0)
+        check("memo.py: a write from the launch folder goes to the work root", mp("note", "settled in chat", cwd=A).returncode == 0 and "settled in chat" in memB.read_text() and "settled in chat" not in memA.read_text())
+        # memo.py move <root>: a misfiled session moved by hand (oth1 from B to D), state follows
+        r = mp("move", str(D), "--session", "oth1", cwd=B, env=env3)
+        check("memo.py: move <root> moves the session's memo and sets its project", r.returncode == 0 and r.stdout.startswith("moved: session oth1 → ") and W.session_memo_path(str(D), "oth1").exists()
+              and "other thing" in W.session_memo_path(str(D), "oth1").read_text() and "moved here from B" in W.session_memo_path(str(D), "oth1").read_text()
+              and not W.session_memo_path(str(B), "oth1").exists() and "(s:oth1)" not in memB.read_text() and "(s:oth1)" in W.memo_path(str(D)).read_text() and wst("oth1").get("project") == os.path.realpath(D))
+        check("memo.py: move to the same folder exits 3, a missing folder exits 2", mp("move", str(D), "--session", "oth1", cwd=B, env=env3).returncode == 3 and mp("move", str(Path(wh, "nope")), "--session", "oth1", cwd=B, env=env3).returncode == 2)
+        check("memo.py: after the move, oth1's own items are gone from B and the guide of B counts one", "1 owner decision open" in gi("project"))
+        import shutil; shutil.rmtree(Path(D, ".claude"))
+        gp = lambda *a: subprocess.run([sys.executable, str(sdir2 / "guide.py"), *a], cwd=A, capture_output=True, text=True, env=env2)
+        check("guide.py: --scope all names the other project's open decisions", "open in other project: A (1)" in gp("--scope", "all").stdout and gp("--scope", "bogus").returncode == 2)
+        os.environ["ABOFLES_STATE_DIR"] = state
 
     # scripts: project-scoped ledger, the user's --session wins, a trailing empty --session is ignored
     sdir = Path(__file__).resolve().parent
