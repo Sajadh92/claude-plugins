@@ -29,16 +29,16 @@ test('band is hidden when every item is done and there is no context meter', asy
   await ui.unmount()
 })
 
-test('Use and Resolve are drawn when the top item has a command', async ($, on) => {
+test('Use is drawn and Resolve is never drawn, even when the item carries a command', async ($, on) => {
   const item = { ...FAIL, resolve: ['python3', 'fix.py'] }
   const ui = await mount($, on, { line: '🧭 🔴 open FAIL', ts: 1, root: '/p', items: [item], ctx: null, task: null, main: null })
   expect(await ui.find({ key: 'use' })).toBeDefined()
-  expect(await ui.find({ key: 'resolve' })).toBeDefined()
+  expect(await ui.find({ key: 'resolve' })).toBeUndefined()
   expect(await ui.find({ key: 'memo' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('Resolve is absent when the top item has no command', async ($, on) => {
+test('Resolve is absent when the top item carries no command', async ($, on) => {
   const ui = await mount($, on, { line: '🧭 🔴 open FAIL', ts: 1, root: '/p', items: [FAIL], ctx: null, task: null, main: null })
   expect(await ui.find({ key: 'use' })).toBeDefined()
   expect(await ui.find({ key: 'resolve' })).toBeUndefined()

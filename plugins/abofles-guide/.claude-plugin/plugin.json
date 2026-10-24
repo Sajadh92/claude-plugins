@@ -1,8 +1,8 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "abofles-guide",
-  "version": "0.3.0",
-  "description": "Abo Fles guide band: the 🧭 next line (what to do now, by priority) drawn above the prompt box, from the state the abofles hooks keep. Needs the abofles plugin.",
+  "version": "0.4.0",
+  "description": "Abo Fles guide and pane: the 🧭 next line above the prompt box, and a pane with the guide, resume, spawns and an overrides editor (Save writes the CLAUDE.md block), from the state the abofles hooks keep. Needs the abofles plugin.",
   "author": {
     "name": "Sajadh92"
   },

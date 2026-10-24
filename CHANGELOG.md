@@ -2,6 +2,21 @@
 
 All notable changes to the plugins in this marketplace.
 
+## abofles 2.1.0 · abofles-guide 0.4.0 — 2026-10-24
+
+- abofles-guide: **the Abo Fles pane.** A pane docked on the right, drawn like the app's own side panels: a **Guide** card (the 🧭 items, Context / Task / Budget rows, Use · Re-check · Memo · Copy · Hide · Undo), a **Resume** card (Session, Memo, Away; Now, Next, Needs you, Left; the last receipts as short rows with Show details), a **Spawns** card (Saved, Tokens, Open FAIL; live agents with their start time; the history newest first with PASS / FAIL) and an **Overrides** card. Every card folds from its header (remembered across sessions), every text wraps, long lists show their first rows and Show all. `/abofles-pane` opens or closes it; it opens by itself once per session, and a pane you closed stays closed. When the window is too narrow the band shows `Abo Fles · <top item>` with a Pane button.
+- abofles-guide: **overrides editor.** `Edit overrides` opens a page with the keys in groups (Session, Agents, Output, Where it shows), a one-line help and a badge per key, a free-form box for the other forms, and Save (writes the block of the project's or your `~/.claude/CLAUDE.md`), Ask Claude to apply, Discard edits and Back.
+- abofles-guide: **breaking — no more Resolve on your word.** The band's Resolve button and its confirm step are gone: Re-check asks Claude to verify the item in the code and resolve it only with the evidence (`--trace "re-checked: …"`, or `"user answered: …"` after a question). Undo reopens Claude's last resolve.
+- abofles: **where things show.** New overrides `Guide place = pane | band`, `Resume place = pane | output`, `Spawns place = pane | output`, all `pane` by default when abofles-guide is installed — **breaking:** the guide, the resume block and the spawn history move from the band and the chat into the pane; set them to `band` / `output` for the old view (also for a client that draws no pane, such as `claude -p` or the SDK). Without the mod nothing changes.
+- abofles: new `/abofles:pane` (points to `/abofles-pane`; prints the resume block and the spawn history without the mod) and `/abofles:spawns` (one line per spawn and the totals; `bill.py --history`).
+- abofles: new `Resume = off` (also `none`, `0`): no automatic resume block in the chat at start, after a compact or after a break; `/abofles:resume` and the pane still show it.
+- abofles: **breaking — resolve needs evidence.** `/abofles:resume --resolve <n>` and `/abofles:status --resolve <id>` refuse (exit 2) without a note / `--trace` naming what was checked.
+- abofles: background agents are tracked to the end: a row whose agent finished but whose SubagentStop never arrived is closed from its transcript (closed_by `stale`) once its last turn is complete, then re-graded and its tokens counted once when the real report arrives; a SendMessage that resumes an agent reopens its row.
+- abofles: the memo's Now from a receipt keeps the receipt's own `next` and one item per sub-bullet; the 🧭 guide line is no longer copied into Next. Fewer false "needs you" items (a tighter match for owner questions).
+- abofles: `scripts/overrides.py` (`get --json`, `set --scope project|user`) edits only the `## abofles overrides` block, keeps every other byte, refuses bad values with one line (exit 2) and a file changed meanwhile (exit 3). Security hardening from review: the temp file is a fresh `mkstemp` file (a planted symlink is never written through), a project CLAUDE.md that links out of the project is refused, a non-UTF-8 file is refused, a BOM is kept, values are capped at 500 characters.
+- Security: the pane runs a command from the state file only in the shape the hook writes (bash, the abofles `scripts/py` launcher, then `memo.py` / `status.py` / `overrides.py` from the same folder); the hidden resume context is marked as memo data, not instructions; control bytes are stripped from pane text; `~/.abofles/state` and `~/.abofles/ledgers` are owner-only (700).
+- The README lists every override in one table (17 keys, 6 forms).
+
 ## abofles 2.0.1 — 2026-10-21
 
 - abofles: **Windows support.** The hook imported `fcntl` (Linux/macOS only) at load time, so every hook crashed on Windows. Locks now use `fcntl.flock` on Unix and a one-byte `msvcrt.locking` lock on Windows (retried up to 10 s).

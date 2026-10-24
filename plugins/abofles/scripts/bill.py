@@ -5,6 +5,7 @@
     bill.py --all           every ledger
     bill.py --baseline opus·high   compare against this model·effort (default opus·high)
     bill.py --assumed-effort       mark the baseline effort as assumed (session effort unknown)
+    bill.py --history       one line per spawn (time, side, status, confidence, model·effort, tokens, $, saved) and the totals line
 
 Cost index = output-price ratio x effort factor. haiku 1, sonnet 20, opus 40,
 fable 100 (list price per output token, Haiku = 1). Effort: low 0.5, medium 1,
@@ -15,12 +16,13 @@ import json
 import os
 import re
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 try:
-    from abofles_hook import label, newest_state, newest_session_id, usd, fmt_tokens, fmt_usd, PRICE_USD, session_arg
+    from abofles_hook import label, newest_state, newest_session_id, usd, fmt_tokens, fmt_usd, PRICE_USD, session_arg, history_totals
 except Exception:  # pragma: no cover
     newest_state = lambda *a, **k: {}
     newest_session_id = lambda *a, **k: ""
@@ -30,6 +32,7 @@ except Exception:  # pragma: no cover
     fmt_tokens = str
     fmt_usd = lambda x: f"${x:.2f}"
     PRICE_USD = {}
+    history_totals = lambda rows, bm="opus", be="high": {"spawns": len(rows), "tokens": 0, "usd": 0.0, "base_usd": 0.0, "saved_pct": 0, "open_fail": 0}
 
 LEDGER_DIR = Path(os.environ.get("ABOFLES_LEDGER_DIR", Path.home() / ".abofles" / "ledgers"))
 PRICE = {"haiku": 1, "sonnet": 20, "opus": 40, "fable": 100}
@@ -83,6 +86,9 @@ def main():
     if not rows:
         print("abofles: no spawns logged yet." if all_sessions else "abofles: no ledger for this session yet")
         return
+
+    if "--history" in args:
+        return print_history(rows, bm, be or "high")
 
     by_model = Counter()
     by_side = Counter()
@@ -148,6 +154,20 @@ def main():
         note = " (every spawn ran on opus — the saving of abofles is in tier routing; no Read/T1–T2 spawn in this session)"
     print(f"Saved: {saved:.0f}%{note}")
     print_real_spend(rows, bm)
+
+
+def print_history(rows, bm, be):
+    """One line per spawn, oldest first, then the totals (the sums of the pane's Spawns tab)."""
+    for r in rows:
+        t = time.strftime("%m-%d %H:%M", time.localtime(r["ts"])) if r.get("ts") else "--:--"
+        real = r.get("tokens") and r.get("base_usd")
+        saved = f"saved {100 * (1 - (r.get('usd') or 0) / r['base_usd']):.0f}%" if real else "saved -"
+        print(f"{t}  {(r.get('side') or '?'):<8} {(r.get('status') or '?'):<8} {(r.get('confidence') or '?'):<6} "
+              f"{label(r.get('model') or '?', r.get('effort')):<22} {fmt_tokens(r['tokens']) if r.get('tokens') else '-':>6} tok  "
+              f"{fmt_usd(r['usd']) if r.get('usd') is not None else '-':>7}  {saved}")
+    t = history_totals(rows, bm, be)
+    print(f"Total: {t['spawns']} spawn{'' if t['spawns'] == 1 else 's'} · {fmt_tokens(t['tokens'])} tokens · {fmt_usd(t['usd'])} "
+          + (f"(same tokens on {label(bm, be)}: {fmt_usd(t['base_usd'])}) · " if t["base_usd"] else "") + f"saved {t['saved_pct']}%" + (f" · {t['open_fail']} open FAIL" if t["open_fail"] else ""))
 
 
 def print_real_spend(rows, base_model):

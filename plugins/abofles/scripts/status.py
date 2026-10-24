@@ -3,10 +3,10 @@
 
     status.py                       newest session ledger
     status.py --all                 every ledger
-    status.py --resolve <agent_id>  mark one follow-up resolved (prefix match)
+    status.py --resolve <agent_id> --trace <evidence>  mark one follow-up resolved (prefix match)
     status.py --unresolve <agent_id>  reopen a follow-up marked resolved
-      both take --session <sid> and --trace [text]: one "resolved/reopened by hand" line in the memo Journal
-      exit codes: 0 changed · 1 no match / no ledger / error · 2 usage (missing or empty value)
+      both take --session <sid> and --trace [text]: one "resolved/reopened by hand" line in the memo Journal; --resolve needs the text (the evidence)
+      exit codes: 0 changed · 1 no match / no ledger / error · 2 usage (missing or empty value, --resolve without evidence)
                   · 3 nothing to change (already resolved / not resolved) — no trace line is written
     status.py --baseline opus·high  compare against this model·effort (default opus·high)
 
@@ -35,10 +35,10 @@ except Exception:  # pragma: no cover
     fmt_usd = lambda x: f"${x:.2f}"
     PRICE_USD = {}
 try:
-    from abofles_hook import memo_trace, memo_path, state_path, ledger_path, state_lock, replace_file
+    from abofles_hook import memo_trace, memo_path, state_path, ledger_path, state_lock, replace_file, last_resolved_note, script_cmd
 except Exception:  # pragma: no cover
     import contextlib
-    memo_trace = None
+    memo_trace = last_resolved_note = script_cmd = None
     ledger_path = lambda sid: Path(os.environ.get("ABOFLES_LEDGER_DIR", Path.home() / ".abofles" / "ledgers")) / f"{re.sub(r'[^A-Za-z0-9_-]', '', sid or '') or 'unknown'}.jsonl"
     state_lock = lambda sid: contextlib.nullcontext()
     replace_file = os.replace
@@ -104,7 +104,7 @@ def follow_ups(rows):
             j = open_fail.pop(r.get("topic"))
             items = [it for it in items if it[0] != j]
         if r.get("status") == "pending":
-            why.append("still pending (background reply never arrived?)")
+            why.append("resumed, running" if r.get("resumed") else "still pending (background reply never arrived?)")
         if why:
             items.append((i, r, why))
     return items
@@ -115,7 +115,8 @@ def bar(n, width=20, total=None):
     return "█" * max(1, round(width * n / total)) if n else ""
 
 
-USAGE = "usage: status.py --resolve <agent_id> | --unresolve <agent_id> [--session <sid>] [--trace [text]]"
+USAGE = "usage: status.py --resolve <agent_id> --trace <evidence> | --unresolve <agent_id> [--session <sid>] [--trace [text]]"
+NO_EVIDENCE = 'abofles: resolve needs evidence — add a note, e.g. --trace "re-checked: <evidence>" or "user answered: <answer>"'
 
 
 def flag_value(args, flag):
@@ -138,6 +139,11 @@ def settle(args, sess=None):
     if key is None or (has_sid and sid is None):
         print(USAGE)
         return 2
+    if not undo:  # nothing is settled on a bare word: --resolve takes the evidence as the trace text
+        _, ev0 = flag_value(args, "--trace")
+        if not (ev0 or "").strip():
+            print(NO_EVIDENCE)
+            return 2
     f = resolve_ledger(sess)  # the same ledger the display shows, so a row listed there can be settled here
     if f is None:
         print(f"abofles: no ledger for session {re.sub(r'[^A-Za-z0-9_-]', '', sid)}" if has_sid else "abofles: no ledger yet — nothing to " + ("reopen." if undo else "resolve."))
@@ -187,19 +193,27 @@ def settle(args, sess=None):
                 pass
             return 1
     print(f"abofles: {'reopened' if undo else 'resolved'} {len(hit)} entr{'y' if len(hit) == 1 else 'ies'} ({key}…)")
+    r0 = hit[0]
+    kind = "open FAIL" if r0.get("verdict") == "FAIL" else "ATTENTION" if r0.get("attention") else "escalate"
+    what = f"{kind} · {r0.get('topic') or r0.get('side') or '?'}"
+    root = proj = os.getcwd()  # the session's own root wins when known
+    try:
+        stj = json.loads(state_path(sid).read_text())
+        root = stj.get("root") or root
+        proj = stj.get("project") or root
+    except Exception:
+        pass
+    ev = ""
     if "--trace" in args and memo_trace:
         i = args.index("--trace") + 1
         ev = args[i] if i < len(args) and not args[i].startswith("--") else ""
-        r0 = hit[0]
-        kind = "open FAIL" if r0.get("verdict") == "FAIL" else "ATTENTION" if r0.get("attention") else "escalate"
-        what = f"{kind} · {r0.get('topic') or r0.get('side') or '?'}"
-        root = os.getcwd()  # the band runs with cwd = the guide root; the session's own root wins when known
-        try:
-            root = json.loads(state_path(sid).read_text()).get("root") or root
-        except Exception:
-            pass
         if root:  # memo_trace creates the memo when this is the project's first journal line
             memo_trace(root, sid, f"{'reopened' if undo else 'resolved'} by hand: {what}" + (f" · {ev}" if ev and ev not in what else ""))
+    if last_resolved_note:  # the band's Undo: Claude's last resolve, until the turn after it ends
+        if undo:
+            last_resolved_note(proj, sid)
+        else:
+            last_resolved_note(proj, sid, what, script_cmd("status.py", "--unresolve", key, "--session", sid, "--trace", what))
     return 0
 
 
@@ -260,7 +274,7 @@ def main():
     print()
     fu = follow_ups(rows)
     if fu:
-        print(f"Open follow-ups ({len(fu)}) — resolve with: /abofles:status --resolve <id>")
+        print(f"Open follow-ups ({len(fu)}) — resolve with: /abofles:status --resolve <id> --trace \"re-checked: <evidence>\"")
         for i, r, why in fu:
             aid = (r.get("agent_id") or f"row{i}")[:8]
             print(f"  ⚠ {aid}  {r.get('topic') or '?'} / {SIDE_FULL.get(r.get('side') or '?', r.get('side') or '?')} — {', '.join(why)}")

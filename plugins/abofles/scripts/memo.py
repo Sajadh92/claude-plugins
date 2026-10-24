@@ -6,10 +6,10 @@
     memo.py show --all           the main memo, then this session's file
     memo.py show --main          the main memo only (Needs you, Decisions, Sessions index)
     memo.py scope [session|project|all]        print the scope in force and where it comes from; with a value, save it as the user default
-    memo.py resolve <n> [note] [--trace] [--session <sid>]   tick item n of "Needs you" (--trace: one "resolved by hand" line in Journal)
+    memo.py resolve <n> <note> [--trace] [--session <sid>]   tick item n of "Needs you"; the note is the evidence, required (--trace: one "resolved by hand" line in Journal)
     memo.py reopen <n> [--trace] [--session <sid>]           turn a resolved item n back to open (drops the resolve note)
       --session <sid> stamps the trace with that session instead of the newest one (two sessions in one root)
-      exit codes: 0 changed · 1 no such item · 2 usage (bad n, missing or empty --session value)
+      exit codes: 0 changed · 1 no such item · 2 usage (bad n, missing or empty --session value, resolve without a note)
                   · 3 nothing to change (already resolved / already open) — no trace line is written
     memo.py note <text>          add a user note to Decisions (something settled in chat)
     memo.py now < text           replace the Now section from stdin (what /abofles:memo writes)
@@ -32,7 +32,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import memo_path, session_memo_path, sess_read, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg, resume_scope, config_read, config_write, SCOPES, CONFIG_PATH, memo_move, load_state, save_state, state_lock, refresh_guide, guide_line  # noqa: E402
+from abofles_hook import memo_path, session_memo_path, sess_read, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg, resume_scope, config_read, config_write, SCOPES, CONFIG_PATH, memo_move, load_state, save_state, state_lock, refresh_guide, guide_line, last_resolved_note, script_cmd, clip  # noqa: E402
+
+NO_EVIDENCE = 'abofles: resolve needs evidence — add a note, e.g. --trace "re-checked: <evidence>" or "user answered: <answer>"'
 
 
 def scope_arg(args):
@@ -67,7 +69,7 @@ def main():
         want = (args[1] if len(args) > 1 else "").strip().lower()
         if want:
             if want not in SCOPES:
-                print("usage: memo.py scope session|project|all")
+                print("usage: memo.py scope session|project|all" + (" (`off` is only valid as `- Resume = off` in the `## abofles overrides` block)" if want in ("off", "none", "0") else ""))
                 sys.exit(2)
             cfg = config_read()
             cfg["resume_scope"] = want
@@ -117,7 +119,7 @@ def main():
         print(block or "abofles: no memo yet — it is written at the first receipt, or by /abofles:memo.")
     elif cmd in ("resolve", "reopen"):
         undo = cmd == "reopen"
-        usage = "usage: memo.py resolve <n> [note] [--trace] [--session <sid>]" if not undo else "usage: memo.py reopen <n> [--trace] [--session <sid>]"
+        usage = "usage: memo.py resolve <n> <note> [--trace] [--session <sid>]" if not undo else "usage: memo.py reopen <n> [--trace] [--session <sid>]"
         rest, a_sid = [], None
         i = 1
         while i < len(args):  # --session takes a value; everything else that is not --trace is the note
@@ -139,6 +141,9 @@ def main():
         n = rest[0]
         if a_sid is not None:
             sid = re.sub(r"[^A-Za-z0-9_-]", "", a_sid) or "unknown"
+        if not undo and not " ".join(rest[1:]).strip():  # nothing is settled on a bare word: the note is the evidence (the hook's own auto-resolves call memo_resolve in code)
+            print(NO_EVIDENCE)
+            sys.exit(2)
         hit = memo_reopen(cwd, int(n)) if undo else memo_resolve(cwd, int(n), " ".join(rest[1:]))
         if not hit:
             try:
@@ -151,8 +156,14 @@ def main():
             print(f"abofles: no {'resolved' if undo else 'open'} item {n} in Needs you ({memo_path(cwd)})")
             sys.exit(1)
         print(f"{'reopened' if undo else 'resolved'}: {hit}")
+        item = re.sub(r"\s*\(s:[0-9a-z-]{1,12}\)\s*$", "", re.sub(r"^\d+\. \[.\] \S+ \S+ · (owner decision:\s*)?", "", hit))
+        note = "" if undo else " ".join(rest[1:]).strip()
         if "--trace" in args:
-            memo_trace(cwd, sid, f"{'reopened' if undo else 'resolved'} by hand: owner decision {n}: " + re.sub(r"\s*\(s:[0-9a-z-]{1,12}\)\s*$", "", re.sub(r"^\d+\. \[.\] \S+ \S+ · (owner decision:\s*)?", "", hit)))
+            memo_trace(cwd, sid, f"{'reopened' if undo else 'resolved'} by hand: owner decision {n}: " + (clip(item, 70) + f" · {note}" if note else item))  # the note is the evidence: it must survive the Journal clip
+        if undo:
+            last_resolved_note(cwd, sid)  # a reopen ends the band's Undo
+        elif sid:
+            last_resolved_note(cwd, sid, f"owner decision {n}: {item}", script_cmd("memo.py", "reopen", n, "--trace", "--session", sid))
     elif cmd == "note":
         text = " ".join(args[1:]).strip()
         if not text:

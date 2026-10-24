@@ -5,14 +5,14 @@ A Claude Code plugin marketplace.
 | Plugin | What it does |
 |---|---|
 | [abofles](plugins/abofles) | Abo Fles (ابو فليس) counts every token: routes each subagent to the right model and effort. |
-| [abofles-guide](plugins/abofles-guide) 0.3.0 | Companion mod for abofles: the `🧭 next` guide as a band above the prompt box, with Use, Re-check, Resolve (confirm + Undo), Memo, Copy and Hide buttons. |
+| [abofles-guide](plugins/abofles-guide) | Companion mod for abofles: the **Abo Fles pane** on the right (Guide, Resume, Spawns, and an Overrides editor that saves the `## abofles overrides` block), and the `🧭 next` guide band above the prompt box (Use, Re-check, Undo, Memo, Copy, Hide). `/abofles-pane` opens or closes the pane. |
 
 ## Install
 
 ```
 /plugin marketplace add Sajadh92/claude-plugins
 /plugin install abofles@sajadh92
-/plugin install abofles-guide@sajadh92   # optional: the band above the prompt box
+/plugin install abofles-guide@sajadh92   # optional: the Abo Fles pane and the guide band
 ```
 
 ## Updates

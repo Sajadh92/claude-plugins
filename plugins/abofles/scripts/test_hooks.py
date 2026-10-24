@@ -49,6 +49,7 @@ def main():
         os.environ["ABOFLES_TEST_CWD"] = cwd
         os.environ["ABOFLES_USER_CLAUDE_MD"] = str(Path(state, "no-user-claude.md"))
         os.environ["ABOFLES_CONFIG"] = str(Path(state, "config.json"))
+        os.environ["ABOFLES_CLAUDE_HOME"] = str(Path(state, "claude-home"))  # no ~/.claude/settings.json, no plugin cache: the abofles-guide mod counts as not installed (resume prints as before)
         os.environ.pop("ABOFLES_RECEIPT", None)
         Path(cwd, "src").mkdir(); Path(cwd, "src/a.cs").write_text("x\n" * 30)
         def pin(sid=None):  # the scripts pick the session for a command: ABOFLES_SESSION, else the newest prompt among this folder's sessions
@@ -372,7 +373,7 @@ def main():
         check("memo: needs-you gets ATTENTION + owner decision, not chain state", "1. [ ]" in txt and "ATTENTION: USD orders uncapped" in txt and "2. [ ]" in txt and "owner decision: cap per currency?" in txt and "FE #541" not in txt.split("## Decisions")[0].split("## Needs you")[1])
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="mm"), led)
         run("receipt", {"session_id": "mm", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": rtxt}, led)
-        check("memo: same open item not duplicated; journal newest first", mf.read_text().split("## Sessions")[0].count("ATTENTION: USD orders uncapped") == 1 and sf("mm").read_text().count("ATTENTION: USD orders uncapped") == 2 + 2 and mf.read_text().count("[ ]") == 2)  # Needs you once (the index line repeats it as `next:`); two journal lines and the Now block's Left and Next in the session file
+        check("memo: same open item not duplicated; journal newest first", mf.read_text().split("## Sessions")[0].count("ATTENTION: USD orders uncapped") == 1 and sf("mm").read_text().count("ATTENTION: USD orders uncapped") == 2 + 1 and mf.read_text().count("[ ]") == 2)  # Needs you once; two journal lines and the Now block's Left (no Next copy) in the session file
         # decision log from AskUserQuestion
         run("decision", {"session_id": "mm", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Cap in IQD only?", "options": []}]}, "tool_response": {"answers": {"Cap in IQD only?": "Yes, IQD only"}}}, led)
         check("memo: AskUserQuestion logged with answer in the session file", "Cap in IQD only? → Yes, IQD only" in sf("mm").read_text() and "Cap in IQD only?" not in mf.read_text())
@@ -400,6 +401,43 @@ def main():
         # session start after compact -> resume block
         out = run("start", {"session_id": "mm", "cwd": cwd, "source": "compact"}, led)
         check("memo: SessionStart(compact) prints the resume block", isinstance(out, str) and "RESUME (context was just compacted)" in out and "📍 **Resume**" in out)
+        # Resume = off: no automatic block (start, compact, away); /abofles:resume and the guide keep working
+        for _v in ("off", "OFF"):
+            Path(cwd, "CLAUDE.md").write_text(f"## abofles overrides\n- Resume = {_v}\n")
+            _o1, _o2 = run("start", {"session_id": "mm", "cwd": cwd, "source": "startup"}, led) or "", run("start", {"session_id": "mm", "cwd": cwd, "source": "compact"}, led) or ""
+            check(f"memo: Resume = {_v} -> SessionStart startup/compact print no resume block", "abofles RESUME" not in _o1 and "abofles RESUME" not in _o2 and "📍" not in _o1 + _o2)
+            stj = json.loads(stf.read_text()); stj["last_activity"] = int(time.time()) - 11 * 60; stf.write_text(json.dumps(stj))
+            check(f"memo: Resume = {_v} -> prompt after 11 min away prints no resume block", "RESUME" not in ctx(run("prompt", {"session_id": "mm", "cwd": cwd}, led)))
+            check(f"memo: Resume = {_v} -> memo.py show still prints the block", "📍 **Resume**" in memo("show"))
+            _rs = _H0.resume_scope(cwd)
+            check(f"memo: Resume = {_v} -> resume_scope ignores it", _rs[0] in ("project", "session", "all") and _rs[1] != "override")
+        # aliases none / 0 and every SessionStart source: no automatic block
+        for _v in ("off", "none", "0"):
+            Path(cwd, "CLAUDE.md").write_text(f"## abofles overrides\n- Resume = {_v}\n")
+            _outs = [run("start", {"session_id": "mm", "cwd": cwd, "source": s}, led) or "" for s in ("startup", "compact", "resume", "clear")]
+            check(f"memo: Resume = {_v} -> no abofles RESUME at SessionStart startup/compact/resume/clear", all("abofles RESUME" not in o for o in _outs))
+        # resume_off unit: aliases and case/space tolerated, near-misses and prose are not
+        for _v, _want in (("off", True), ("None", True), (" 0 ", True), ("offf", False), ("project", False)):
+            Path(cwd, "CLAUDE.md").write_text(f"## abofles overrides\n- Resume = {_v}\n")
+            check(f"memo: resume_off({_v!r}) is {_want}", _H0.resume_off(cwd) is _want)
+        Path(cwd, "CLAUDE.md").write_text("Notes\n- Resume = off\n\n## abofles overrides\n- Break = 30\n")
+        check("memo: `- Resume = off` outside the overrides block is prose -> resume_off False", _H0.resume_off(cwd) is False)
+        # location: <project>/.claude/CLAUDE.md and the user-level file both turn it off
+        Path(cwd, "CLAUDE.md").unlink()
+        _loc = {"project .claude/CLAUDE.md": Path(cwd, ".claude", "CLAUDE.md"), "user-level file": Path(_H0.USER_CLAUDE_MD)}
+        for _name, _lp in _loc.items():
+            _lp.parent.mkdir(parents=True, exist_ok=True)
+            _lp.write_text("## abofles overrides\n- Resume = off\n")
+            check(f"memo: Resume = off in the {_name} -> resume_off True", _H0.resume_off(cwd) is True)
+            check(f"memo: Resume = off in the {_name} -> SessionStart(compact) prints no resume block", "abofles RESUME" not in (run("start", {"session_id": "mm", "cwd": cwd, "source": "compact"}, led) or ""))
+            _lp.unlink()
+        # memo.py show --scope all still prints the block under Resume = off
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Resume = off\n")
+        check("memo: Resume = off -> memo.py show --scope all still prints the block", "📍 **Resume**" in memo("show", "--scope", "all"))
+        Path(cwd, "CLAUDE.md").unlink()
+        check("memo: removing `Resume = off` restores SessionStart(compact) block", "RESUME (context was just compacted)" in (run("start", {"session_id": "mm", "cwd": cwd, "source": "compact"}, led) or ""))
+        stj = json.loads(stf.read_text()); stj["last_activity"] = int(time.time()) - 11 * 60; stf.write_text(json.dumps(stj))
+        check("memo: removing `Resume = off` restores the away block", "abofles RESUME (the user was away 11 min)" in ctx(run("prompt", {"session_id": "mm", "cwd": cwd}, led)))
         _nm = run("start", {"session_id": "mm2", "cwd": state, "source": "startup"}, led) or ""
         check("memo: SessionStart with no memo -> no resume block (only the topic-lookup line)", "📍" not in _nm and "RESUME" not in _nm and all(l.startswith("abofles: topic lookup") for l in _nm.splitlines() if l.strip()))
         # agent gate: ask once, parse the answer, enforce the budget and the parallel cap
@@ -553,7 +591,7 @@ def main():
         check("resume: Now section stamped", "now written 20" in blk)
         run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="rt"), led)
         run("receipt", {"session_id": "rt", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": rtxt}, led)
-        stf = sf("rt"); old = stf.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), time.strftime("Written   %Y-01-01 00:00")); stf.write_text(old)  # a receipt rewrites Now itself: age it after the receipt
+        stf = sf("rt"); old = re.sub(r"Written   \d{4}-\d\d-\d\d \d\d:\d\d", time.strftime("Written   %Y-01-01 00:00"), stf.read_text()); stf.write_text(old)  # a regex, not this minute: the hook may have written it a minute ago  # a receipt rewrites Now itself: age it after the receipt
         blk = memo("show")
         check("resume: old Now shows its age and the receipts since", ("hours" in blk.splitlines()[0] or "day" in blk.splitlines()[0]) and "ago)" in blk and "- `since` → " in blk and "may be stale" in blk)
         # 5. a receipt closes the task even while a background agent of it still runs
@@ -744,6 +782,10 @@ def main():
         check("guide: an open FAIL item carries the Use prompt and the resolve command",
               fi.get("p") == "🔴" and fi.get("fill", "").startswith("abofles: open FAIL on Unit Test (agent vf1abc) — fix it in the main session when ≤ 3 calls")
               and fi.get("resolve") is None and fi.get("unresolve") is None)
+        check("guide: an open FAIL fill makes Claude re-check first and resolve only with the traced evidence",
+              "re-check it first" in fi.get("fill", "") and "re-checked: <evidence>" in fi["fill"] and "say so and resolve it" not in fi["fill"])
+        check("guide: the recheck command is the portable scripts/py form, not an absolute interpreter path",
+              "scripts/py" in fi.get("recheck", "") and sys.executable not in fi["recheck"] and " -X utf8 " not in fi["recheck"])
         check("guide: an open FAIL has no blind resolve, a recheck prompt with the traced resolve command",
               fi.get("recheck", "").startswith("abofles: re-check the open FAIL on Unit Test (agent vf1abc)") and "--resolve vf1abc --session gu --trace" in fi["recheck"] and "re-checked: <evidence>" in fi["recheck"])
         out = run("post", dict(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Unit Test / Verify · T2\nq\nLine cap: 20", resp="STATUS: done\nCONFIDENCE: high\nVERDICT: PASS\nEVIDENCE:\n- tests: 13 passed\nISSUES: none", cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
@@ -753,29 +795,37 @@ def main():
         check("guide: an unescalated partial names the next setting", "🟡 escalate · Read Haiku 5.5 · Low came back partial/medium — re-run that subtask at Haiku 5.5 · Medium" in ctx(out))
         yi = next((i for i in (json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items", []) if i["p"] == "🟡"), {})
         STx = Path(__file__).resolve().parent / "status.py"
-        check("guide: an escalate item resolves with a --trace and unresolves through status.py",
-              yi.get("resolve", [])[1:3] == ["-X", "utf8"] and yi.get("resolve", [])[3:] == [str(STx), "--resolve", "es1abc", "--session", "gu", "--trace", yi.get("resolve", ["", "", "", "", "", "", ""])[-1]] and yi["resolve"][-1].startswith("Read ")
-              and (yi.get("unresolve") or [])[:9] == [sys.executable, "-X", "utf8", str(STx), "--unresolve", "es1abc", "--session", "gu", "--trace"] and yi.get("recheck") is None)
+        check("guide: an escalate item has no resolve/unresolve argv, its recheck carries the traced resolve command",
+              yi.get("resolve") is None and yi.get("unresolve") is None and "--resolve es1abc --session gu" in (yi.get("recheck") or "") and "re-checked: <evidence>" in yi["recheck"]
+              and "If you show evidence instead that the reply is sound, resolve it with `" in yi["recheck"] and yi["recheck"].startswith("abofles: the Read agent")
+              and "--resolve es1abc --session gu" in yi["fill"] and yi["recheck"].index("re-run that subtask") < yi["recheck"].index("If you show evidence"))
+        check("guide: the FAIL fill names the exact resolve command, not a bare --trace fragment", "--resolve vf1abc --session gu --trace" in fi["fill"] and "with `--trace" not in fi["fill"])
+        check("guide: no item fill (open FAIL, escalate) lets Claude resolve on a bare claim",
+              all("say so and resolve it" not in (i.get("fill") or "") for i in (json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items", []))
+              and "re-checked: <evidence>" in yi.get("fill", "") and "sound, resolve it only with" in yi["fill"])
+        ES_NOTE = "Read Haiku 5.5 · Low came back partial/medium"
+        ES_RES = [sys.executable, "-X", "utf8", str(STx), "--resolve", "es1abc", "--session", "gu", "--trace", ES_NOTE]
+        ES_UN = [sys.executable, "-X", "utf8", str(STx), "--unresolve", "es1abc", "--session", "gu", "--trace", ES_NOTE]
         pin("gu")
         genv = dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)
-        rr = _sp.run(yi["resolve"], cwd=cwd, capture_output=True, text=True, env=genv)
+        rr = _sp.run(ES_RES, cwd=cwd, capture_output=True, text=True, env=genv)
         check("trace: status --resolve --trace settles the row", rr.returncode == 0 and "resolved 1 entry" in rr.stdout)
         check("trace: one resolved-by-hand line in the Journal with the session tag", len([l for l in sf("gu").read_text().splitlines() if "· resolved by hand: escalate · Unit Test · Read " in l and l.count("escalate") == 1]) == 1)
         check("trace: the resume block does not list a hand-trace under last and counts no receipt for it", "resolved by hand: escalate" not in memo("show").split("- `last`")[-1] and "- `since` → 1 receipt" not in memo("show"))
         gout = _sp.run([sys.executable, str(GU := Path(__file__).resolve().parent / "guide.py"), "--all"], cwd=cwd, capture_output=True, text=True, env=genv).stdout
         check("trace: a resolved escalate leaves the guide", "🟡 escalate" not in gout)
-        ur = _sp.run(yi["unresolve"], cwd=cwd, capture_output=True, text=True, env=genv)
+        ur = _sp.run(ES_UN, cwd=cwd, capture_output=True, text=True, env=genv)
         check("trace: status --unresolve reopens the row", ur.returncode == 0 and "reopened 1 entry" in ur.stdout)
         gout = _sp.run([sys.executable, str(GU), "--all"], cwd=cwd, capture_output=True, text=True, env=genv).stdout
         check("trace: the guide shows the escalate again", "🟡 escalate" in gout)
-        ur2 = _sp.run(yi["unresolve"], cwd=cwd, capture_output=True, text=True, env=genv)
+        ur2 = _sp.run(ES_UN, cwd=cwd, capture_output=True, text=True, env=genv)
         check("trace: unresolve of an open row exits 3", ur2.returncode == 3 and "not resolved" in ur2.stdout)
         ur3 = _sp.run([sys.executable, str(STx), "--unresolve", "nope", "--session", "gu"], cwd=cwd, capture_output=True, text=True, env=genv)
         check("trace: unresolve miss exits 1", ur3.returncode == 1)
-        _sp.run(yi["resolve"][:-2] + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
-        _sp.run(yi["unresolve"] + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
+        _sp.run(ES_RES[:-2] + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
+        _sp.run(ES_UN + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
         check("trace: --unresolve --trace writes reopened by hand", "· reopened by hand: escalate · Unit Test" in sf("gu").read_text())
-        _sp.run(yi["unresolve"], cwd=cwd, capture_output=True, text=True, env=genv)
+        _sp.run(ES_UN, cwd=cwd, capture_output=True, text=True, env=genv)
         out = run("receipt", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "🧾 **3 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y\n- `open` → owner decision: cap per currency?"}, led)
         run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "source": "resume"}, led)
         blk = run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "source": "resume"}, led)
@@ -784,18 +834,21 @@ def main():
         gout = _sp.run([sys.executable, str(GU), "--all"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led)).stdout
         check("guide: CLI --all lists the ladder", gout.startswith("🟠 ") and "owner decision" in gout)
         od = ((json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items") or [{}])[0]
-        check("guide: an owner decision item asks the user after judging, and resolves through memo.py",
+        check("guide: an owner decision item asks the user after judging; no resolve argv, a recheck with the traced memo.py command and AskUserQuestion",
               od.get("p") == "🟠" and od.get("fill", "").startswith("abofles: owner decision 1 is open: ") and od["fill"].endswith("Judge it first, then ask me with AskUserQuestion.")
-              and od.get("resolve") == [sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "memo.py"), "resolve", "1", "settled from the guide band", "--trace", "--session", "gu"]
-              and od.get("unresolve") == [sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "memo.py"), "reopen", "1", "--trace", "--session", "gu"] and od.get("recheck") is None)
-        rout = _sp.run(od["resolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)).stdout
+              and od.get("resolve") is None and od.get("unresolve") is None
+              and all(x in (od.get("recheck") or "") for x in ("resolve 1 --session gu", "memo.py", "re-checked: <evidence>", "--trace \"user answered: <answer>\"", "AskUserQuestion", "Re-check it first")))
+        MEMOPY = str(Path(__file__).resolve().parent / "memo.py")
+        OD_RES = [sys.executable, "-X", "utf8", MEMOPY, "resolve", "1", "settled in the test", "--trace", "--session", "gu"]
+        OD_UN = [sys.executable, "-X", "utf8", MEMOPY, "reopen", "1", "--trace", "--session", "gu"]
+        rout = _sp.run(OD_RES, cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)).stdout
         check("guide: running the owner decision's resolve command ticks it in the memo", rout.startswith("resolved:") and "1. [x]" in mf.read_text())
         check("trace: memo resolve --trace journals the owner decision", any("resolved by hand: owner decision 1: " in l and "(s:" not in l.split("by hand:")[1] for l in sf("gu").read_text().splitlines()))
-        rop = _sp.run(od["unresolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
+        rop = _sp.run(OD_UN, cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
         check("memo reopen: item is open again and the resolve note is gone", rop.returncode == 0 and any(l.startswith("1. [ ] ") and "→ resolved" not in l for l in mf.read_text().splitlines()))
-        rop = _sp.run(od["unresolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
+        rop = _sp.run(OD_UN, cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
         check("memo reopen: an open item exits 3", rop.returncode == 3)
-        _sp.run(od["resolve"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
+        _sp.run(OD_RES, cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
         out = run("post", dict(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Unit Test / Verify · T2\nq\nLine cap: 20", resp="STATUS: done\nCONFIDENCE: high\nVERDICT: FAIL\nEVIDENCE:\n- tests: 1 failed\nISSUES:\n- src/b.cs:3 — null", cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
         check("guide: a FAIL of the open task is shown", "🔴 open FAIL · Unit Test" in ctx(out))
         time.sleep(1.1)  # the receipt closes the task in a later second than its rows
@@ -804,7 +857,7 @@ def main():
         out = run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
         check("guide: a FAIL of a task already closed by its receipt is not carried into the next task", "🔴 open FAIL" not in ctx(out))
         STp = Path(__file__).resolve().parent / "status.py"
-        sout = _sp.run([sys.executable, str(STp), "--resolve", "nope"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)).stdout
+        sout = _sp.run([sys.executable, str(STp), "--resolve", "nope", "--trace", "re-checked: t"], cwd=cwd, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)).stdout
         check("cli: status.py --resolve runs and names the miss", "no follow-up with agent id starting 'nope'" in sout)
         Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Guide = off\n")
         out = run("post", dict(agent("haiku", "low", resp=good, cwd=cwd), session_id="gu", transcript_path=str(tr)), led)
@@ -910,14 +963,14 @@ def main():
         _hs = _iu.spec_from_file_location("abofles_hook_t3", str(HOOK)); H = _iu.module_from_spec(_hs); _hs.loader.exec_module(H)
         gstate = lambda sid_: json.loads(Path(state, f"{sid_}.json").read_text())
         gitems = lambda sid_: (gstate(sid_).get("guide") or {}).get("items") or []
-        RC1 = "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → capped the surcharge in AqsatiRules.cs\n- `why` → money rule\n- `check` → `dotnet test` → 13 passed\n- `open` →\n  - wire the FE badge\n  - update the docs page"
+        RC1 = "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → capped the surcharge in AqsatiRules.cs\n- `why` → money rule\n- `check` → `dotnet test` → 13 passed\n- `open` →\n  - wire the FE badge\n  - update the docs page\n- `next` → wire the FE badge"
         # 1. memo Now rewritten by the receipt
         pa = tempfile.mkdtemp(); sA = "autosess1"
         run("start", {"session_id": sA, "cwd": pa}, led)
         H.memo_now(pa, "Task      old task\nDone      old done\nLeft      old left\nDecisions keep: tables are printed above the box\nNext      old next\nVerify    old verify\nTree      M old.cs", sA)
         run("receipt", {"session_id": sA, "cwd": pa, "stop_hook_active": False, "last_assistant_message": RC1}, led)
         nowA = H.sess_read(pa, sA)["Now"]
-        check("now auto: a receipt rewrites this session's Now (between tasks, Done, Left lines, Next = first open item, Verify)",
+        check("now auto: a receipt rewrites this session's Now (between tasks, Done, Left lines, Next = the receipt's own next, Verify)",
               "Task      none — between tasks" in nowA and "Done      capped the surcharge in AqsatiRules.cs" in nowA and "Left      wire the FE badge\nLeft      update the docs page" in nowA
               and "Next      wire the FE badge" in nowA and "Verify    `dotnet test` → 13 passed" in nowA and "old left" not in nowA and "old next" not in nowA and "old done" not in nowA)
         check("now auto: Decisions kept unchanged, Tree kept outside git, block marked from receipt",
@@ -932,6 +985,69 @@ def main():
               "Left" not in nowA2 and "Next      none — ready for the next task" in nowA2 and "capped the surcharge" in nowA2 and "13 passed" in nowA2 and "Decisions keep:" in nowA2)
         nx_ = next((i for i in gitems(sA) if i.get("id") == "next"), {})
         check("now auto: Next 'none…' -> the band says pick the next ticket", nx_.get("text") == "nothing open — pick the next ticket and route it with abofles first")
+        # Next follows the receipt's own `next`; sub-bullets of `open` are single Left items; the 🧭 guide line is not copied
+        RCH = "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → ok\n- `open` →\n  - QA did not test X, Y one by one; the full suite covers them\n  - update the docs page"
+        pn = tempfile.mkdtemp(); sN = "nextsess1"
+        run("start", {"session_id": sN, "cwd": pn}, led)
+        run("receipt", {"session_id": sN, "cwd": pn, "stop_hook_active": False, "last_assistant_message": RCH + "\n- `next` → 🧭 🟠 1 owner decision open — ask (judge first): docs page"}, led)
+        nowN = H.sess_read(pn, sN)["Now"]; blkN = H.resume_block(pn, session_id=sN)
+        check("now auto: next = a 🧭 guide line -> no Next line, both open items kept as Left", "Next" not in nowN and "Left      QA did not test X, Y one by one; the full suite covers them\nLeft      update the docs page" in nowN)
+        check("now auto: ... resume shows no `next` line, exactly 2 left items with the first intact, and the guide line is not duplicated",
+              "- `next`" not in blkN and "- `left` →\n  - QA did not test X, Y one by one; the full suite covers them\n  - update the docs page" in blkN)
+        nx_ = next((i for i in gitems(sN) if i.get("id") == "next"), None)
+        check("now auto: ... and the band's ✅ item does not crash or go empty without a Next", nx_ is None or nx_.get("text"))
+        check("now auto: ... no Next but Left items -> the ✅ item names the first left item, not 'pick the next ticket'",
+              nx_ is None or nx_.get("text") == "no decision open — left from the memo: QA did not test X, Y one by one; the full suite covers them")
+        # a one-line guide `next` is split at " · " only after the guide-line check: the pieces after the 🧭 head are guide items, not Next
+        pn2 = tempfile.mkdtemp(); sN2 = "nextsess2"
+        run("start", {"session_id": sN2, "cwd": pn2}, led)
+        run("receipt", {"session_id": sN2, "cwd": pn2, "stop_hook_active": False, "last_assistant_message": RCH + "\n- `next` → 🧭 🟠 1 owner decision open — ask (judge first): docs page · 🟡 escalate · Work agent partial · 💰 agent budget 2 left"}, led)
+        nowN2 = H.sess_read(pn2, sN2)["Now"]
+        check("now auto: a one-line next that starts with 🧭 and has ` · ` pieces (🟡 escalate, 💰 budget) -> no Next line at all", "Next" not in nowN2 and "escalate" not in nowN2 and "agent budget" not in nowN2)
+        run("receipt", {"session_id": sN2, "cwd": pn2, "stop_hook_active": False, "last_assistant_message": RCH + "\n- `next` → run the full suite · then docs"}, led)
+        nowN3 = H.sess_read(pn2, sN2)["Now"]
+        check("now auto: a one-line next without 🧭 is still split into Next items", "Next      run the full suite" in nowN3 and "Next      then docs" in nowN3)
+        run("receipt", {"session_id": sN, "cwd": pn, "stop_hook_active": False, "last_assistant_message": RCH + "\n- `next` → none — wait for QA"}, led)
+        check("now auto: next = none... -> no Next line while items are left", "Next" not in H.sess_read(pn, sN)["Now"])
+        run("receipt", {"session_id": sN, "cwd": pn, "stop_hook_active": False, "last_assistant_message": RCH + "\n- `next` → <next step>"}, led)
+        check("now auto: next = a <placeholder> -> no Next line", "Next" not in H.sess_read(pn, sN)["Now"])
+        run("receipt", {"session_id": sN, "cwd": pn, "stop_hook_active": False, "last_assistant_message": RCH + "\n- `next` → wire the FE badge"}, led)
+        blkN = H.resume_block(pn, session_id=sN)
+        nx_ = next((i for i in gitems(sN) if i.get("id") == "next"), {})
+        check("now auto: next = real text -> Next, resume `next` line, and nothing is copied from the first open item",
+              "Next      wire the FE badge" in H.sess_read(pn, sN)["Now"] and "- `next` → wire the FE badge" in blkN)
+        run("receipt", {"session_id": sN, "cwd": pn, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → ok\n- `open` → a; b"}, led)
+        check("now auto: a one-line open `a; b` (no sub-bullets) is still two Left items", "Left      a\nLeft      b" in H.sess_read(pn, sN)["Now"])
+        # a sub-bullet of `open` is one Needs-you item; a one-line open is still split; several `next` sub-bullets are several Next lines
+        RCO = "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → ok\n- `open` →\n  - ATTENTION: bad thing; owner decision: pick?"
+        pq = tempfile.mkdtemp(); sQ = "needsub1"
+        run("start", {"session_id": sQ, "cwd": pq}, led)
+        run("receipt", {"session_id": sQ, "cwd": pq, "stop_hook_active": False, "last_assistant_message": RCO}, led)
+        nq = [l for l in H.memo_read(pq)["Needs you"].splitlines() if l.strip()]
+        check("needs: one `open` sub-bullet with `; ` is one Needs-you item holding both halves", len(nq) == 1 and "ATTENTION: bad thing; owner decision: pick?" in nq[0])
+        # NEEDS_RE: a word merely mentioned in a note is not a Needs-you item; a tag, an owner phrase or a question is
+        _nr = {"Needs-you item 2 is out of date now that Confirm is gone, so it stays open for you.": False,
+               "I resolved this session's FAIL, escalate and partial-Read follow-ups with evidence.": False,
+               "verifier FAIL fixed in main session": False, "nothing is committed or shipped": False,
+               "PR 1 needs your approval.": True, "ATTENTION: USD orders uncapped": True, "owner decision: cap per currency?": True,
+               "open FAIL · topic: fix it": True, "FAIL: criterion 5": True, "VERDICT: FAIL on docs": True,
+               "Should the key include the tenant?": True, "the owner must decide the window": True, "Posting it needs your OK.": True}
+        check("needs: NEEDS_RE flags tags, owner phrases and questions, not a mentioned word (Confirm, a resolved FAIL)",
+              all(bool(H.NEEDS_RE.search(k)) == v for k, v in _nr.items()))
+        pq2 = tempfile.mkdtemp(); sQ2 = "needsub2"
+        run("start", {"session_id": sQ2, "cwd": pq2}, led)
+        run("receipt", {"session_id": sQ2, "cwd": pq2, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → ok\n- `open` → ATTENTION: x; ATTENTION: y"}, led)
+        nq2 = [l for l in H.memo_read(pq2)["Needs you"].splitlines() if l.strip()]
+        check("needs: a one-line open `ATTENTION: x; ATTENTION: y` is still two Needs-you items", len(nq2) == 2 and "ATTENTION: x" in nq2[0] and "ATTENTION: y" in nq2[1])
+        pq3 = tempfile.mkdtemp(); sQ3 = "nextsub1"
+        run("start", {"session_id": sQ3, "cwd": pq3}, led)
+        run("receipt", {"session_id": sQ3, "cwd": pq3, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → ok\n- `open` → none\n- `next` →\n  - wire the FE badge\n  - update the docs page"}, led)
+        nowQ = H.sess_read(pq3, sQ3)["Now"]; blkQ = H.resume_block(pq3, session_id=sQ3)
+        nx_ = next((i for i in gitems(sQ3) if i.get("id") == "next"), {})
+        check("next: two `next` sub-bullets -> two Next lines in Now", "Next      wire the FE badge\nNext      update the docs page" in nowQ and "wire the FE badge; update" not in nowQ)
+        check("next: resume shows `next` with 2 sub-bullets; the guide ✅ item uses the first", "- `next` →\n  - wire the FE badge\n  - update the docs page" in blkQ and "next from the memo: wire the FE badge" in nx_.get("text", "") and "docs page" not in nx_.get("text", ""))
+        run("receipt", {"session_id": sN, "cwd": pn, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → ok\n- `open` → none\n- `next` → 🧭 something"}, led)
+        check("now auto: open none + a guide-line next -> ready for the next task", "Next      none — ready for the next task" in H.sess_read(pn, sN)["Now"] and "Left" not in H.sess_read(pn, sN)["Now"])
         pg = tempfile.mkdtemp()
         if subprocess.run(["git", "init", "-q"], cwd=pg, capture_output=True).returncode == 0:
             Path(pg, "a.txt").write_text("x")
@@ -945,7 +1061,7 @@ def main():
         pb = tempfile.mkdtemp(); sB = "agesess01"
         run("start", {"session_id": sB, "cwd": pb}, led)
         run("receipt", {"session_id": sB, "cwd": pb, "stop_hook_active": False, "last_assistant_message": RC1}, led)
-        stb = H.session_memo_path(pb, sB); stb.write_text(stb.read_text().replace(time.strftime("Written   %Y-%m-%d %H:%M"), "Written   2020-01-01 00:00"))
+        stb = H.session_memo_path(pb, sB); stb.write_text(re.sub(r"Written   \d{4}-\d\d-\d\d \d\d:\d\d", "Written   2020-01-01 00:00", stb.read_text()))
         run("prompt", {"session_id": sB, "cwd": pb}, led)
         check("now auto: an old Now with receipts since still raises the memo-age item", "memo-age" in [i.get("id") for i in gitems(sB)])
         run("receipt", {"session_id": sB, "cwd": pb, "stop_hook_active": False, "last_assistant_message": RC1}, led)
@@ -1068,6 +1184,7 @@ def main():
         e4 = next((i for i in gitems("nx4") if i["p"] == "🟡"), {})
         check("guide: an escalate at the top setting (T3) says stop and report, no max setting", "stop and report" in e3.get("text", "") and "Max" not in e3.get("text", "") and "stop and report" in e3.get("fill", ""))
         check("guide: the same on T4 offers Opus 5.5 · Max", "Opus 5.5 · Max" in e4.get("text", ""))
+        check("guide: an escalate with no higher setting still has a recheck (stop and report, then the traced resolve)", "stop and report" in (e3.get("recheck") or "") and "--resolve wkx111 --session" in e3["recheck"] and "re-checked: <evidence>" in e3["recheck"] and e3.get("resolve") is None)
         check("guide: escalate text names the agent and carries id esc:<agent>", e3.get("id") == "esc:wkx111" and "agent wkx111" in e3.get("text", "") and e4.get("id") == "esc:wkx444" and "agent wkx444" in e4.get("text", ""))
         # 12. guide item ids
         pi_ = tempfile.mkdtemp(); sI = "idsess1"; tri = Path(pi_, "t.jsonl")
@@ -1078,12 +1195,81 @@ def main():
         time.sleep(1.1)
         iv = lambda extra: dict(extra, session_id=sI, transcript_path=str(tri))
         run("post", iv(agent("sonnet", "high", "abofles:abofles-verifier", prompt="abofles: Ids Topic / Verify · T2\nq\nLine cap: 20", resp={"agentId": "vfx111", "content": "STATUS: done\nCONFIDENCE: high\nVERDICT: FAIL\nEVIDENCE:\n- c1 — FAIL — src/a.cs:1\nISSUES:\nNOTE: none"}, cwd=pi_)), led)
+        time.sleep(1.1)
+        run("post", iv(agent("haiku", "low", resp={"agentId": "esx111", "content": "STATUS: partial\nCONFIDENCE: low\nFACTS:\n- src/a.cs:1 — x\nGAPS: not read"}, cwd=pi_)), led)
         run("post", iv(jp(2, ask)), led)
         run("post", iv(agent("haiku", "low", resp={"status": "async_launched", "agentId": "bgx111", "prompt": "p", "description": "t"}, cwd=pi_)), led)
         run("prompt", {"session_id": sI, "cwd": pi_, "transcript_path": str(tri)}, led)
         iditems = {i["id"]: i for i in gitems(sI)}
         check("guide ids: fail:<agent>, ask, dec:<n>, bg:<agent>, ctx:<mark>, budget on their items", {"fail:vfx111", "ask", "dec:1", "bg:bgx111", "ctx:500", "budget"} <= set(iditems))
-        check("guide ids: the owner-decision resolve/reopen argv carries --session <sid>", (iditems.get("dec:1", {}).get("resolve") or [])[-2:] == ["--session", sI] and (iditems.get("dec:1", {}).get("unresolve") or [])[-2:] == ["--session", sI])
+        check("guide ids: the owner-decision item has no resolve/reopen argv, its recheck carries `resolve 1 --session <sid>`",
+              iditems.get("dec:1", {}).get("resolve") is None and iditems.get("dec:1", {}).get("unresolve") is None
+              and f"resolve 1 --session {sI}" in (iditems.get("dec:1", {}).get("recheck") or "") and "AskUserQuestion" in iditems["dec:1"]["recheck"])
+        # 13. the band never settles an item: every guide item has resolve/unresolve None; Claude's resolve is traced and undoable
+        po_ = tempfile.mkdtemp(); run("start", {"session_id": "idsess2", "cwd": po_}, led); H.memo_needs(po_, "idsess2", "owner decision: elsewhere?")
+        allst = dict(gstate(sI), review_missing={"names": ["qa"], "tier": 3, "topic": "Ids Topic", "ts": int(time.time())}, receipt_owed=True)
+        led0_, H.LEDGER_DIR = H.LEDGER_DIR, Path(led)  # H reads the ledger the hook subprocesses wrote
+        allit = H.guide_entries(pi_, allst, sI, scope="all")
+        allids = {i["id"] for i in allit}
+        check("guide: the fixture raises fail, esc, dec, review, receipt and dec:elsewhere items", {"fail:vfx111", "esc:esx111", "dec:1", "review", "receipt", "dec:elsewhere"} <= allids)
+        check("guide: every item of the ladder has resolve and unresolve None", allit and all(i.get("resolve") is None and i.get("unresolve") is None and "resolve" in i and "unresolve" in i for i in allit))
+        check("guide: the fail, esc and dec items carry a recheck, the others none", all(bool(i.get("recheck")) == (i["id"].split(":")[0] in ("fail", "esc") or i["id"] == "dec:1") for i in allit))
+        sec_ = H.memo_read(pi_); sec_["Needs you"] = "- [ ] a free-text line with no number"; H.memo_write(pi_, sec_, sI)
+        dn = next(i for i in H.guide_entries(pi_, gstate(sI), sI, scope="project") if i["id"] == "dec:?")
+        H.LEDGER_DIR = led0_
+        check("guide: an owner decision without a number has no recheck", dn.get("recheck") is None and dn.get("resolve") is None and dn.get("unresolve") is None)
+        # Claude's resolve: the evidence in the Journal, Undo in the guide state until the turn after the next Stop
+        pl_ = tempfile.mkdtemp(); sL = "lres1"
+        run("start", {"session_id": sL, "cwd": pl_}, led)
+        H.memo_needs(pl_, sL, "owner decision: pick A or B?")
+        run("prompt", {"session_id": sL, "cwd": pl_, "prompt": "go"}, led)
+        lenv = dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state)
+        lmemo = lambda *a: _sp.run([sys.executable, "-X", "utf8", MEMOPY, *a, "--session", sL], cwd=pl_, capture_output=True, text=True, env=lenv)
+        lres = lambda: (gstate(sL).get("guide") or {}).get("last_resolved")
+        check("guide: no last_resolved before a resolve", lres() is None and "last_resolved" in (gstate(sL).get("guide") or {}))
+        time.sleep(0.05)
+        lr1 = lmemo("resolve", "1", "re-checked: X", "--trace")
+        check("memo resolve --trace: the note lands in the Journal line as the evidence", lr1.returncode == 0 and any("resolved by hand: owner decision 1: " in l and l.endswith(" · re-checked: X") for l in H.sess_read(pl_, sL)["Journal"].splitlines()))
+        lr = lres() or {}
+        check("memo resolve: the guide state keeps last_resolved with the item text and the reopen argv",
+              lr.get("text", "").startswith("owner decision 1: ") and "pick A or B" in lr["text"] and len(lr["text"]) <= 100 and isinstance(lr.get("ts"), float)
+              and lr.get("unresolve") == ["bash", str(Path(MEMOPY).parent / "py").replace("\\", "/"), MEMOPY.replace("\\", "/"), "reopen", "1", "--trace", "--session", sL] and all(not i["id"].startswith("dec:") for i in gitems(sL)))
+        ur_ = _sp.run(lr.get("unresolve") or ["false"], cwd=pl_, capture_output=True, text=True, env=lenv)
+        check("memo Undo argv runs through the launcher from the project root and reopens the item", ur_.returncode == 0 and ur_.stdout.startswith("reopened:") and "1. [ ] " in H.memo_path(pl_).read_text() and lres() is None)
+        lmemo("resolve", "1", "re-checked: X", "--trace")  # back to the resolved state the checks below expect
+        lr = lres() or {}
+        run("receipt", {"session_id": sL, "cwd": pl_, "stop_hook_active": False, "last_assistant_message": "done"}, led)
+        check("last_resolved survives the Stop of the same turn", (lres() or {}).get("unresolve") == lr.get("unresolve"))
+        time.sleep(0.05)
+        run("prompt", {"session_id": sL, "cwd": pl_, "prompt": "next"}, led)
+        check("last_resolved is still there during the next turn", lres() is not None)
+        run("receipt", {"session_id": sL, "cwd": pl_, "stop_hook_active": False, "last_assistant_message": "done"}, led)
+        check("last_resolved is gone after the next turn's Stop", lres() is None and "last_resolved" not in gstate(sL))
+        lmemo("reopen", "1")
+        ne_ = lmemo("resolve", "1")
+        check("memo resolve without a note exits 2 with the evidence message and leaves the item open", ne_.returncode == 2 and "abofles: resolve needs evidence — add a note, e.g. --trace \"re-checked: <evidence>\" or \"user answered: <answer>\"" in ne_.stdout
+              and "1. [ ] " in H.memo_path(pl_).read_text())
+        nw_ = lmemo("resolve", "1", "   ", "--trace")
+        check("memo resolve with a whitespace note exits 2 too, item still open", nw_.returncode == 2 and "resolve needs evidence" in nw_.stdout and "1. [ ] " in H.memo_path(pl_).read_text())
+        lmemo("resolve", "1", "again")
+        check("memo resolve without --trace still records last_resolved", lres() is not None)
+        lo = lmemo("reopen", "1", "--trace")
+        check("memo reopen clears last_resolved", lo.returncode == 0 and lres() is None)
+        sL2 = "lres2"; run("start", {"session_id": sL2, "cwd": pl_}, led)
+        run("post", dict(agent("haiku", "low", "abofles:abofles-reader", resp={"agentId": "lrx111", "content": "STATUS: partial\nCONFIDENCE: medium\nFACTS:\n- src/a.cs:1 — x\nGAPS: not read"}, cwd=pl_), session_id=sL2), led)
+        lst = lambda *a: _sp.run([sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "status.py"), *a, "--session", sL2], cwd=pl_, capture_output=True, text=True, env=lenv)
+        ls1 = lst("--resolve", "lrx111", "--trace", "re-checked: sound")
+        lr2 = (gstate(sL2).get("guide") or {}).get("last_resolved") or {}
+        check("status --resolve: last_resolved holds the --unresolve argv", ls1.returncode == 0 and lr2.get("unresolve", [])[:1] == ["bash"] and lr2["unresolve"][1].endswith("/scripts/py") and lr2["unresolve"][2:7] == [str(Path(__file__).resolve().parent / "status.py").replace("\\", "/"), "--unresolve", "lrx111", "--session", sL2] and lr2.get("text"))
+        us_ = _sp.run(lr2["unresolve"], cwd=pl_, capture_output=True, text=True, env=lenv)
+        check("status Undo argv runs through the launcher and reopens the row", us_.returncode == 0 and "reopened 1 entry" in us_.stdout)
+        ns_, nt_ = lst("--resolve", "lrx111"), lst("--resolve", "lrx111", "--trace", "  ")
+        check("status --resolve without trace text exits 2 with the evidence message, the row stays open",
+              ns_.returncode == 2 and nt_.returncode == 2 and ns_.stdout.startswith("abofles: resolve needs evidence") and "user answered: <answer>" in ns_.stdout
+              and not any(json.loads(l).get("resolved") for l in (Path(led) / f"{sL2}.jsonl").read_text().splitlines() if l.strip()))
+        lst("--resolve", "lrx111", "--trace", "re-checked: sound")
+        ls2 = lst("--unresolve", "lrx111")
+        check("status --unresolve clears last_resolved", ls2.returncode == 0 and "last_resolved" not in gstate(sL2) and (gstate(sL2).get("guide") or {}).get("last_resolved") is None)
         # ── Batch A: the graded reply text, header-aware replies, exact gate agents, stale unlocks, lost agents ──
         setst = lambda sid_, **kw: json.dump(dict(gstate(sid_), **kw), open(Path(state, f"{sid_}.json"), "w"))
         ledrows = lambda sid_: [json.loads(l) for l in Path(led, f"{sid_}.jsonl").read_text().splitlines() if l.strip()]
@@ -1234,6 +1420,122 @@ def main():
         lr_ = ledrows("bc2")[0]
         check("stop: a lost row that gets its real SubagentStop reply is re-graded from it, not dropped", lr_.get("how") == "hint" and lr_.get("status") == "done" and lr_.get("confidence") == "high")
 
+        # a stale-pending fallback must not close an agent that is still thinking; a stale close is re-graded by the real SubagentStop
+        def sk_msg(kind, text="", sr="absent", mid="m", tok=0):
+            usage = {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": tok, "output_tokens": 0}
+            if kind == "tool_result": return {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}
+            if kind == "attachment": return {"type": "attachment", "attachment": {"type": "total_tokens_reminder", "text": "<total_tokens>1</total_tokens>"}}
+            parts = {"tool_use": [{"type": "text", "text": text}, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}] if text else [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}],
+                     "thinking": [{"type": "thinking", "thinking": ""}], "text": [{"type": "text", "text": text}]}[kind]
+            m = {"id": mid, "model": "claude-haiku-5-5", "usage": usage, "content": parts}
+            if sr != "absent": m["stop_reason"] = sr
+            return {"type": "assistant", "message": m}
+        def sk_agent(sid_, aid, entries, age, **post_kw):
+            run("start", {"session_id": sid_, "cwd": cwd, "transcript_path": str(tr)}, led)
+            run("post", dict(post_kw.pop("pi_", pi), session_id=sid_, transcript_path=str(tr), tool_response=launch_(aid)), led)
+            f = Path(cwd, sid_, "subagents", f"agent-{aid}.jsonl"); f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("".join(json.dumps(e) + "\n" for e in entries))
+            os.utime(f, (time.time() - age, time.time() - age))
+            return f
+        sk_stop = lambda sid_, text="all done": run("receipt", {"session_id": sid_, "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": text}, led)
+        sk_row = lambda sid_, aid: next(r for r in ledrows(sid_) if r.get("agent_id") == aid)
+        out_ = None
+        sk_agent("sk", "k1", [sk_msg("tool_use", "reading", "tool_use", "a"), sk_msg("tool_result"), sk_msg("attachment")], 200)
+        out_ = sk_stop("sk")
+        check("stale: an idle transcript ending in tool_use / tool_result / attachment is not closed (the agent is mid-work), no 'no receipt' nudge", sk_row("sk", "k1").get("status") == "pending" and "no receipt" not in json.dumps(out_ or {}))
+        sk_agent("sk2", "k2", [sk_msg("text", "partial", "tool_use", "a"), sk_msg("thinking", sr=None, mid="b")], 200)
+        sk_stop("sk2")
+        check("stale: an idle transcript whose last entry is thinking-only (stop_reason None) stays pending", sk_row("sk2", "k2").get("status") == "pending")
+        tfm_ = Path(cwd, "tf-malformed.jsonl"); tfm_.write_text('{"type":"assistant","message":"x"}\n')
+        check("stale: a transcript entry whose message is not an object is not a finished turn and does not raise", H.turn_finished(tfm_) is False)
+        sk_agent("sk2b", "k2b", [sk_msg("thinking", sr="end_turn", mid="a")], 200)
+        sk_stop("sk2b")
+        check("stale: an idle transcript whose last entry is thinking-only with stop_reason end_turn is not finished, stays pending", sk_row("sk2b", "k2b").get("status") == "pending")
+        sk_agent("sk3", "k3", [sk_msg("text", good, "end_turn", "a", 50_000)], 200)
+        sk_stop("sk3")
+        r3_ = sk_row("sk3", "k3")
+        check("stale: an idle transcript ending in an end_turn report closes the row, closed_by=stale", r3_.get("status") == "done" and r3_.get("closed_by") == "stale")
+        sk_agent("sk4", "k4", [sk_msg("text", "partial notes", "tool_use", "a"), sk_msg("tool_result")], H.LOST_MIN * 60 + 10)
+        sk_stop("sk4")
+        r4_ = sk_row("sk4", "k4")
+        check("stale: an unfinished transcript silent past LOST_MIN is closed with an 'unfinished' note, closed_by=stale", r4_.get("status") != "pending" and r4_.get("closed_by") == "stale" and any("unfinished" in w for w in r4_.get("warnings") or []))
+        check("stale: the unfinished-timeout close without a graded status is blocked / low", r4_.get("status") == "blocked" and r4_.get("confidence") == "low")
+        f5_ = sk_agent("sk5", "k5", [sk_msg("text", "Understood.", "end_turn", "a", 50_000)], 200)
+        sk_stop("sk5")
+        r5_ = sk_row("sk5", "k5"); t5_ = gstate("sk5").get("task_tokens", 0)
+        with open(f5_, "a") as fh_: fh_.write(json.dumps(sk_msg("text", good, "end_turn", "b", 30_000)) + "\n")  # cumulative usage: 80k in total
+        run("stop", {"session_id": "sk5", "agent_id": "k5", "last_assistant_message": good}, led)
+        r5b_ = sk_row("sk5", "k5")
+        check("stop: setup — a headerless stub was closed by the stale fallback with its tokens counted", r5_.get("closed_by") == "stale" and r5_.get("tokens") == 50_000 and t5_ == 50_000)
+        check("stop: the real report re-grades a stale-closed row (done/high, closed_by gone) and the task counts the token delta only", r5b_.get("status") == "done" and r5b_.get("confidence") == "high" and "closed_by" not in r5b_ and r5b_.get("tokens") == 80_000 and gstate("sk5").get("task_tokens") == 80_000)
+        jpi_ = agent("sonnet", "medium", "abofles:abofles-judge", prompt="abofles: X / Judge · T2\nq\nLine cap: 40", cwd=cwd)
+        sk_agent("sk6", "k6", [sk_msg("text", "Understood.", "end_turn", "a", 1)], 200, pi_=jpi_)
+        setst("sk6", gate="auto")
+        sk_stop("sk6")
+        ok6_ = gstate("sk6").get("judge_ok", 0)
+        ask_ = "STATUS: done\nCONFIDENCE: high\nVERDICT: ASK\nQUESTION: q\nEVIDENCE:\n- a.cs:1 — x\nWHY: w\nOPTIONS:\n- A — means: m · then: t · pick when: p\nRECOMMEND: A — r"
+        run("stop", {"session_id": "sk6", "agent_id": "k6", "last_assistant_message": ask_}, led)
+        ok6b_ = gstate("sk6").get("judge_ok", 0)
+        run("stop", {"session_id": "sk6", "agent_id": "k6", "last_assistant_message": ask_}, led)
+        check("stop: a stale-closed judge stub, then the real VERDICT: ASK, unlocks once; a repeat stop for the agent adds no second unlock", sk_row("sk6", "k6").get("closed_by") is None and ok6b_ == ok6_ + 1 and gstate("sk6").get("judge_ok", 0) == ok6b_)
+
+        # a SendMessage that resumes a finished agent re-opens its ledger row: it runs in the background again (no "no receipt" nudge while it works)
+        rs_sync = lambda sid_, aid, name=None, stype="abofles:abofles-reader", text=good: run("post", dict(agent("haiku", "low", stype, prompt="abofles: Resume / R · T2\nq\nLine cap: 40" if "judge" not in stype else "abofles: Resume / Judge · T2\nq\nLine cap: 40", resp={"agentId": aid, "status": "completed", "content": [blk(text)], "usage": {}, "totalTokens": 9}, cwd=cwd), session_id=sid_, transcript_path=str(tr), tool_input=dict(agent("haiku", "low", stype, cwd=cwd)["tool_input"], **({"name": name} if name else {}))), led)
+        rs_msg = lambda sid_, to, resp="absent": run("sendmsg", dict({"session_id": sid_, "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": to, "message": "more"}}, **({} if resp == "absent" else {"tool_response": resp})), led)
+        rs_ok = lambda aid: {"success": True, "message": "Resuming agent " + aid[:7], "resumedAgentId": aid, "pin": {"id": aid, "name": aid}}
+        rs_row = lambda sid_, aid: next(r for r in ledrows(sid_) if r.get("agent_id") == aid)
+        run("start", {"session_id": "rs0", "cwd": cwd, "transcript_path": str(tr)}, led)
+        rs_sync("rs0", "q0")
+        check("resume: control — a finished sync agent with no resume gets the 'no receipt' nudge", "no receipt" in json.dumps(sk_stop("rs0") or {}))
+        run("start", {"session_id": "rs", "cwd": cwd, "transcript_path": str(tr)}, led)
+        rs_sync("rs", "q1")
+        sp_ = {k: gstate("rs").get(k) for k in ("spawns", "spawns_since_receipt", "task_units", "task_base", "task_judges")}
+        tk_ = {k: gstate("rs").get(k) for k in ("task_tokens", "task_usd")}
+        rs_msg("rs", "q1", rs_ok("q1"))
+        q1_ = rs_row("rs", "q1")
+        check("resume: a SendMessage whose response names resumedAgentId re-opens the agent's done row in place (pending, resumed=1, reopened_ts, no completed_ts)", q1_.get("status") == "pending" and q1_.get("resumed") == 1 and q1_.get("reopened_ts") and "completed_ts" not in q1_ and len(ledrows("rs")) == 1)
+        check("resume: the reopened row drops the old confidence", "confidence" not in q1_)
+        check("resume: not a new spawn — spawns, spawns_since_receipt, task_units, task_base and the token/usd totals unchanged; running_bg = 1", {k: gstate("rs").get(k) for k in sp_} == sp_ and {k: gstate("rs").get(k) for k in tk_} == tk_ and gstate("rs").get("running_bg") == 1)
+        check("resume: the receipt gives no 'no receipt' nudge while the resumed agent runs", "no receipt" not in json.dumps(sk_stop("rs") or {}) and rs_row("rs", "q1").get("status") == "pending")
+        run("stop", {"session_id": "rs", "agent_id": "q1", "last_assistant_message": good}, led)
+        q1b_ = rs_row("rs", "q1")
+        check("resume: the resumed agent's SubagentStop closes the row again, resumed stays 1, one row, same spawn count", q1b_.get("status") == "done" and q1b_.get("resumed") == 1 and q1b_.get("completed_ts") and len(ledrows("rs")) == 1 and gstate("rs").get("spawns") == sp_["spawns"] and all(r.get("status") != "pending" for r in ledrows("rs")))
+        rs_sync("rs", "q2", name="helper-2")
+        rs_msg("rs", "helper-2")  # `to` is the spawn name, the response has no shape to read: falls back to `to`
+        q2_ = rs_row("rs", "q2")
+        check("resume: a SendMessage `to` given as the spawn name (no tool_response) re-opens the row; the name is kept in the ledger", q2_.get("name") == "helper-2" and q2_.get("status") == "pending" and q2_.get("resumed") == 1)
+        before_ = ledrows("rs")
+        rs_msg("rs", "nobody-9", rs_ok("nobody-9")); rs_msg("rs", "q1", {"success": False, "error": "no such agent"})
+        check("resume: a message to an unknown id, or one the harness reports as failed, leaves the ledger unchanged", ledrows("rs") == before_)
+        # stale fallback: the reopened row is fresh for STALE_AFTER from reopened_ts, then closes from the transcript like any pending row
+        run("start", {"session_id": "rs3", "cwd": cwd, "transcript_path": str(tr)}, led)
+        rs_sync("rs3", "q3")
+        f3_ = Path(cwd, "rs3", "subagents", "agent-q3.jsonl"); f3_.parent.mkdir(parents=True, exist_ok=True)
+        f3_.write_text(json.dumps(sk_msg("text", good, "end_turn", "a", 1000)) + "\n"); os.utime(f3_, (time.time() - 600, time.time() - 600))
+        rs_msg("rs3", "q3", rs_ok("q3"))
+        sk_stop("rs3")
+        check("resume: an old, finished transcript does not close the reopened row (reopened_ts is fresh)", rs_row("rs3", "q3").get("status") == "pending")
+        rows3_ = ledrows("rs3"); rows3_[0]["reopened_ts"] = int(time.time()) - H.STALE_AFTER - 60
+        Path(led, "rs3.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows3_))
+        sk_stop("rs3")
+        check("resume: a finished transcript older than reopened_ts (the old turn) does not close the reopened row even past STALE_AFTER", rs_row("rs3", "q3").get("status") == "pending")
+        os.utime(f3_, (time.time() - H.STALE_AFTER - 30, time.time() - H.STALE_AFTER - 30))
+        sk_stop("rs3")
+        r3b_ = rs_row("rs3", "q3")
+        check("resume: with reopened_ts older than STALE_AFTER and a finished transcript the receipt closes the row (closed_by=stale), no SubagentStop needed", r3b_.get("status") != "pending" and r3b_.get("closed_by") == "stale" and r3b_.get("resumed") == 1)
+        # a resumed gate agent: sendmsg's own unlock counts once; the SubagentStop of the resumed turn does not unlock a second time
+        run("start", {"session_id": "rs4", "cwd": cwd, "transcript_path": str(tr)}, led)
+        setst("rs4", gate="auto")
+        rs_sync("rs4", "q4", name="judge-r", stype="abofles:abofles-judge", text=ask_)
+        ok4_ = gstate("rs4").get("judge_ok", 0)
+        out4_ = rs_msg("rs4", "judge-r", rs_ok("q4"))
+        ok4b_ = gstate("rs4").get("judge_ok", 0)
+        run("stop", {"session_id": "rs4", "agent_id": "q4", "last_assistant_message": ask_}, led)
+        q4_ = rs_row("rs4", "q4")
+        check("resume: a resumed judge row is pending, sendmsg unlocks one question (SENDMSG_TEXT), the stop that closes it adds no judge_ok", "unlocked" in ctx(out4_) and ok4b_ == ok4_ + 1 and gstate("rs4").get("judge_ok", 0) == ok4b_ and q4_.get("status") == "done" and q4_.get("resumed") == 1)
+        rs_sync("rs", "q5", name="plain-5")
+        check("resume: a non-gate agent resume prints nothing (no SENDMSG_TEXT)", rs_msg("rs", "q5", rs_ok("q5")) is None)
+
         # 16. a run_in_background call whose result already came back complete, with its report, is a sync reply
         run("start", {"session_id": "bc4", "cwd": cwd, "transcript_path": str(tr)}, led)
         tin_ = dict(agent("haiku", "low")["tool_input"], run_in_background=True)
@@ -1305,6 +1607,43 @@ def main():
               not H.has_receipt("the 🧾 emoji marks it") and not H.has_receipt("── receipt ──\ndone x") and not H.has_receipt("> 🧾 **1 Spawn · 1 u**") and not H.has_receipt("🧾 receipt below") and not H.has_receipt(""))
         b_task("bb7")
         check("receipt: a quoted receipt phrase in the final text still gets the nudge", (stop_("bb7", "I will print the 🧾 receipt later, ── receipt ── soon") or {}).get("decision") == "block")
+        # 4b. the model's own receipt header closes the task (looks_like_receipt); the journal carries the computed header
+        OWN = "🧾 **Receipt**\n- `done` → x\n- `why` → y\n- `check` → z\n- `open` → none\n- `next` → n"
+        check("looks_like_receipt: own header with done+open fields counts (also the old columns); the computed header is not needed",
+              H.looks_like_receipt(OWN) and H.looks_like_receipt("text\n🧾 Receipt\ndone   x\nopen   none") and not H.has_receipt(OWN))
+        check("looks_like_receipt: a bare 🧾 line, a quoted one, prose about a receipt and fields without 🧾 are not a receipt",
+              not H.looks_like_receipt("🧾 receipt coming") and not H.looks_like_receipt("> 🧾 **Receipt**\n- `done` → x\n- `open` → none") and not H.looks_like_receipt("the receipt has `done` and `open` fields")
+              and not H.looks_like_receipt("🧾 **Receipt**\n- `done` → x") and not H.looks_like_receipt("- `done` → x\n- `open` → none") and not H.looks_like_receipt(""))
+        b_task("bf1")
+        hdr_ = re.sub(r"\*\*", "", H.receipt_header(gstate("bf1"))[1:]).strip()
+        check("receipt: a receipt under the model's own header does not block, closes the task",
+              stop_("bf1", OWN) is None and gstate("bf1").get("spawns_since_receipt") == 0 and "receipt_owed" not in gstate("bf1"))
+        jt_ = sf("bf1").read_text()
+        check("receipt: ... and the journal line carries the computed header with the parsed fields", hdr_ in jt_ and "· Receipt" not in jt_ and "done: x" in jt_ and "check: z" in jt_)
+        b_task("bf2")
+        check("receipt: a message with only `🧾 receipt coming` is still nudged, the task stays open",
+              (stop_("bf2", "🧾 receipt coming") or {}).get("decision") == "block" and gstate("bf2").get("spawns_since_receipt") == 1)
+        # 4c. a background chain that ended: the next notification prompt carries the receipt instruction (the launch carried none)
+        bf_launch = lambda sid_, aid_: run("post", dict(agent("haiku", "low", resp=launch_(aid_), cwd=cwd), session_id=sid_, transcript_path=str(tr)), led)
+        bf_done = lambda sid_, aid_: run("stop", {"session_id": sid_, "agent_id": aid_, "last_assistant_message": good}, led)
+        NOTE = "<task-notification>agent finished</task-notification>"
+        run("start", {"session_id": "bf3", "cwd": cwd, "transcript_path": str(tr)}, led)
+        bf_launch("bf3", "bf3a"); bf_done("bf3", "bf3a")
+        out_ = ctx(run("prompt", {"session_id": "bf3", "cwd": cwd, "prompt": NOTE}, led))
+        check("notification: the last background agent finished -> hook context carries the receipt instruction and the computed header",
+              "Receipt at task end" in out_ and "🧾 **1 Spawn" in out_ and "running" not in out_)
+        run("start", {"session_id": "bf4", "cwd": cwd, "transcript_path": str(tr)}, led)
+        bf_launch("bf4", "bf4a"); bf_launch("bf4", "bf4b"); bf_done("bf4", "bf4a")
+        check("notification: another background agent still runs -> no receipt instruction", "Receipt at task end" not in ctx(run("prompt", {"session_id": "bf4", "cwd": cwd, "prompt": NOTE}, led)))
+        run("start", {"session_id": "bf5", "cwd": cwd, "transcript_path": str(tr)}, led)
+        bf_launch("bf5", "bf5a"); bf_done("bf5", "bf5a")
+        check("notification: a real user prompt gets no receipt instruction", "Receipt at task end" not in ctx(run("prompt", {"session_id": "bf5", "cwd": cwd, "prompt": "and now?"}, led)))
+        Path(state, "no-user-claude.md").write_text("## abofles overrides\n- Receipt = off\n")
+        run("start", {"session_id": "bf6", "cwd": cwd, "transcript_path": str(tr)}, led)
+        bf_launch("bf6", "bf6a"); bf_done("bf6", "bf6a")
+        out_ = ctx(run("prompt", {"session_id": "bf6", "cwd": cwd, "prompt": NOTE}, led))
+        check("notification: Receipt = off -> no receipt instruction", "Receipt at task end" not in out_ and "no receipt for this task" not in out_)
+        Path(state, "no-user-claude.md").unlink()
         # 5. the session a script acts on
         import tempfile as _tf
         sess_saved = H.STATE_DIR
@@ -1398,7 +1737,7 @@ def main():
         Path(xh, "led").mkdir(); Path(xh, "st").mkdir()
         st_ = lambda *a: subprocess.run([sys.executable, str(sdir / "status.py"), *a], cwd=xp, capture_output=True, text=True, env=xenv)
         me_ = lambda *a: subprocess.run([sys.executable, str(sdir / "memo.py"), *a], cwd=xp, capture_output=True, text=True, env=xenv)
-        check("exit: status --resolve with no ledger at all exits 1", st_("--resolve", "abc").returncode == 1)
+        check("exit: status --resolve with no ledger at all exits 1", st_("--resolve", "abc", "--trace", "re-checked: t").returncode == 1)
         lf = Path(xh, "led", "xs.jsonl")
         lf.write_text('{"agent_id": "abc123", "status": "partial"}\nHALF{"agent_id":"abc9\n{"agent_id": "abd1", "status": "blocked"}\n')
         check("exit: status --resolve as the last arg exits 2", st_("--resolve").returncode == 2)
@@ -1406,7 +1745,7 @@ def main():
         check("exit: status --resolve with a flag as id exits 2", st_("--resolve", "--trace").returncode == 2)
         check("exit: status --session without a value exits 2", st_("--resolve", "abc", "--session").returncode == 2)
         check("exit: status --unresolve with an empty session exits 2", st_("--unresolve", "abc", "--session", "", "--trace").returncode == 2)
-        check("exit: status --session ../ is cleaned to a name in the ledger dir (no such ledger, exit 1)", st_("--resolve", "abc", "--session", "../../nope").returncode == 1 and not Path(xh, "nope.jsonl").exists())
+        check("exit: status --session ../ is cleaned to a name in the ledger dir (no such ledger, exit 1)", st_("--resolve", "abc", "--session", "../../nope", "--trace", "re-checked: t").returncode == 1 and not Path(xh, "nope.jsonl").exists())
         r1 = st_("--resolve", "abc1", "--session", "xs", "--trace", "by test")
         txt = lf.read_text().splitlines()
         check("exit: status --resolve exits 0, marks the row, keeps the half-written line verbatim",
@@ -1414,9 +1753,9 @@ def main():
         memd = lambda s: Path(xp, ".claude", "abofles-memo.d", f"{s[:8]}.md")  # a trace lands in the file of the session it names
         mem = memd("xs")
         check("exit: status --resolve --trace wrote one Journal line", mem.read_text().count("resolved by hand:") == 1)
-        r2 = st_("--resolve", "abc1", "--session", "xs", "--trace")
+        r2 = st_("--resolve", "abc1", "--session", "xs", "--trace", "again")
         check("exit: status --resolve of a resolved row exits 3, writes no trace", r2.returncode == 3 and mem.read_text().count("resolved by hand:") == 1)
-        check("exit: status --resolve miss exits 1", st_("--resolve", "zzz", "--session", "xs").returncode == 1)
+        check("exit: status --resolve miss exits 1", st_("--resolve", "zzz", "--session", "xs", "--trace", "re-checked: t").returncode == 1)
         check("exit: status --unresolve exits 0", st_("--unresolve", "abc1", "--session", "xs").returncode == 0 and "resolved" not in json.loads(lf.read_text().splitlines()[0]))
         check("exit: status --unresolve of an open row exits 3, writes no trace", st_("--unresolve", "abc1", "--session", "xs", "--trace").returncode == 3 and "reopened by hand" not in mem.read_text())
         # memo.py: Needs-you items through the hook's own writer
@@ -1427,9 +1766,9 @@ def main():
         m1 = me_("resolve", "1", "note", "--trace", "--session", "mysess")
         check("exit: memo resolve exits 0 and the trace carries the given session", m1.returncode == 0 and "· resolved by hand: owner decision 1" in memd("mysess").read_text())
         n_ = memd("mysess").read_text().count("by hand:")
-        m2 = me_("resolve", "1", "--trace", "--session", "mysess")
+        m2 = me_("resolve", "1", "again", "--trace", "--session", "mysess")
         check("exit: memo resolve of a resolved item exits 3, writes no trace", m2.returncode == 3 and memd("mysess").read_text().count("by hand:") == n_)
-        check("exit: memo resolve of a missing item exits 1", me_("resolve", "9").returncode == 1 and me_("reopen", "9").returncode == 1)
+        check("exit: memo resolve of a missing item exits 1", me_("resolve", "9", "re-checked: t").returncode == 1 and me_("reopen", "9").returncode == 1)
         check("exit: memo reopen exits 0 with the given session", me_("reopen", "1", "--trace", "--session", "other").returncode == 0 and "· reopened by hand" in memd("other").read_text())
 
     # ── 1.7.0: specialist reviewers and the review gate ──
@@ -1650,19 +1989,19 @@ def main():
             check(f"scope: {name} shows nothing of another project's ledger", r.returncode == 0 and "OtherProjectTopic" not in r.stdout and "zzz999" not in r.stdout and "no ledger for this session yet" in r.stdout)
             r = sc_(name, "--baseline", "opus", "--session", sid_)
             check(f"scope: {name} with an unknown --session shows nothing of another project's ledger", r.returncode == 0 and "OtherProjectTopic" not in r.stdout)
-        check("scope: status --resolve cannot reach another project's row", sc_("status.py", "--resolve", "zzz9", "--session", sid_).returncode == 1 and "resolved" not in Path(xh, "led", "otherS.jsonl").read_text())
+        check("scope: status --resolve cannot reach another project's row", sc_("status.py", "--resolve", "zzz9", "--session", sid_, "--trace", "re-checked: t").returncode == 1 and "resolved" not in Path(xh, "led", "otherS.jsonl").read_text())
         # this project's session: display and --resolve use the same ledger, with the appended session id
         Path(xh, "st", f"{sid_}.json").write_text(json.dumps({"root": os.path.realpath(xp), "last_prompt_ts": 1}))
         Path(xh, "led", f"{sid_}.jsonl").write_text('{"agent_id": "abc123", "topic": "MineTopic", "status": "partial", "model": "opus", "effort": "high"}\n')
         r = sc_("status.py", "--baseline", "opus", "--session", sid_)
         check("scope: status shows this project's own ledger row", "MineTopic" in r.stdout and "abc123" in r.stdout and "OtherProjectTopic" not in r.stdout)
-        r = sc_("status.py", "--resolve", "abc1", "--session", sid_)
+        r = sc_("status.py", "--resolve", "abc1", "--session", sid_, "--trace", "re-checked: t")
         check("scope: status --resolve <id> --session <uuid> settles the row the display shows", r.returncode == 0 and json.loads(Path(xh, "led", f"{sid_}.jsonl").read_text())["resolved"] is True)
         # memo.py: the user's own --session wins over the command's appended one
         subprocess.run([sys.executable, "-c", "import sys,os; sys.path.insert(0, sys.argv[1]); import abofles_hook as h; h.memo_needs(os.getcwd(), 'sessAAAA', 'owner decision: pick A or B')", str(sdir.parent / "hooks")], cwd=xp, env=xenv)
-        r = sc_("memo.py", "resolve", "1", "--trace", "--session", "mysessX", "--session", sid_)
+        r = sc_("memo.py", "resolve", "1", "re-checked: t", "--trace", "--session", "mysessX", "--session", sid_)
         memx = lambda s: Path(xp, ".claude", "abofles-memo.d", f"{s[:8]}.md")
-        check("session: memo resolve with the user's --session X plus an appended UUID traces into X's file", r.returncode == 0 and "· resolved by hand" in memx("mysessX").read_text() and not memx(sid_).exists())
+        check("session: memo resolve with the user's --session X plus an appended UUID traces into X's file", r.returncode == 0 and "· resolved by hand: owner decision 1" in memx("mysessX").read_text() and "owner decision" not in (memx(sid_).read_text() if memx(sid_).exists() else ""))
         # an empty trailing --session "" (unexpanded command variable) is ignored
         for name, args in (("agents.py", ()), ("status.py", ("--baseline", "opus")), ("bill.py", ("--baseline", "opus")), ("guide.py", ()), ("memo.py", ("show",))):
             r = sc_(name, *args, "--session", "")
@@ -1843,6 +2182,340 @@ def main():
         finally:
             HL.os.path.realpath = _rp
         check("windows: replace_file retries a PermissionError then succeeds", (lambda: (lambda calls: (setattr(HL.os, "replace", (lambda o: (lambda a, b: (calls.append(1), (_ for _ in ()).throw(PermissionError()) if len(calls) < 3 else o(a, b))))(HL.os.replace)), Path(state, "t.tmp").write_text("x"), HL.replace_file(Path(state, "t.tmp"), Path(state, "t.out")), Path(state, "t.out").exists() and len(calls) == 3)[-1])([]))())
+
+
+    with tempfile.TemporaryDirectory() as led, tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as state:  # pane batch: its own dirs and environment
+        os.environ["ABOFLES_STATE_DIR"] = state
+        os.environ["ABOFLES_TEST_CWD"] = cwd
+        os.environ["ABOFLES_USER_CLAUDE_MD"] = str(Path(state, "no-user-claude.md"))
+        os.environ["ABOFLES_CONFIG"] = str(Path(state, "config.json"))
+        os.environ["ABOFLES_CLAUDE_HOME"] = str(Path(state, "claude-home"))
+        os.environ.pop("ABOFLES_SESSION", None)
+        gstate = lambda sid_: json.loads(Path(state, f"{sid_}.json").read_text())
+        # ── Pane batch: golden resume text, places, pane payload ──
+        import importlib.util as _iug
+        _hg = _iug.spec_from_file_location("abofles_hook_gold", str(HOOK)); HG = _iug.module_from_spec(_hg); _hg.loader.exec_module(HG)
+        gp = str(Path(tempfile.mkdtemp(), "goldproj")); gs = "goldsess1"; HG.STATE_DIR = Path(tempfile.mkdtemp())  # empty registry: no other projects
+        Path(gp, ".claude", "abofles-memo.d").mkdir(parents=True)
+        Path(gp, ".claude", "abofles-memo.md").write_text(
+            "# Abo Fles memo — gold\nUpdated: 2026-10-20 10:30 · session goldsess\nProject: x\n\n## Needs you\n"
+            "1. [ ] 10-20 09:10 · owner decision: cap per unit or per order? (s:goldsess)\n2. [x] 10-20 09:11 · done thing (s:goldsess)\n3. [ ] 10-20 09:12 · ATTENTION: banner copy needs your OK (s:othersess)\n"
+            "\n## Decisions\n\n## Sessions\n- [goldsess](abofles-memo.d/goldsess.md) · 10-20 10:30 · task: cap the surcharge · receipts: 2\n- [othersess](abofles-memo.d/othersess.md) · 10-20 09:00 · task: the banner · receipts: 1\n")
+        Path(gp, ".claude", "abofles-memo.d", "goldsess.md").write_text(
+            "# Session goldsess\nUpdated: 2026-10-20 10:30\nProject: x\n\n## Now\nWritten   2026-10-20 10:00\nTask      cap the surcharge in AqsatiRules.cs\nLeft      wire the FE badge; update the docs page\nNext      run the full suite\n"
+            "\n## Journal\n- 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n- 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n- 10-20 10:05 · 🧾 **1 Spawn** · done: first\n- 10-20 09:50 · 🧾 old\n\n## Decisions\n")
+        Path(gp, ".claude", "abofles-memo.d", "othersess.md").write_text("# Session othersess\n\n## Now\nWritten   2026-10-20 09:00\nTask      the banner\n\n## Journal\n- 10-20 09:00 · 🧾 **1 Spawn** · done: banner\n\n## Decisions\n")
+        _t0 = time.time
+        time.time = lambda: time.mktime(time.strptime("2026-10-20 13:30", "%Y-%m-%d %H:%M"))
+        try:
+            gold_out = {
+                "project": HG.resume_block(gp, session_id=gs, guide="🧭 ✅ nothing open"),
+                "away": HG.resume_block(gp, 42, session_id=gs),
+                "session": HG.resume_block(gp, session_id=gs, scope="session"),
+                "hint": HG.resume_block(gp, session_id="freshsess9"),
+                "all": HG.resume_block(gp, session_id=gs, scope="all"),
+            }
+        finally:
+            time.time = _t0
+        GOLD = {
+            'project': "📍 **Resume** · memo 2026-10-20 10:30 · session goldsess · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) ATTENTION: banner copy needs your OK (s:othersess)\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first\n- `guide` → 🧭 ✅ nothing open",
+            'away': "📍 **Resume** · memo 2026-10-20 10:30 · away 42 min · session goldsess · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) ATTENTION: banner copy needs your OK (s:othersess)\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first",
+            'session': "📍 **Resume** · memo 2026-10-20 10:30 · session goldsess · scope session · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 1 open: 1) owner decision: cap per unit or per order? (s:goldsess)\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first",
+            'hint': "📍 **Resume** · memo 2026-10-20 10:30 · session freshses\n- `project` → goldproj: 2 other sessions, newest goldsess · task: cap the surcharge — their work, not yours; `/abofles:resume --scope project` shows them\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) ATTENTION: banner copy needs your OK (s:othersess)",
+            'all': "📍 **Resume** · memo 2026-10-20 10:30 · session goldsess · scope all · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) ATTENTION: banner copy needs your OK (s:othersess)\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first",
+        }
+        for _k, _v in GOLD.items():
+            check(f"resume_block golden text ({_k}) is byte-identical", gold_out[_k] == _v)
+
+        # places and the mod switch
+        chome = Path(state, "claude-home"); HG.LEDGER_DIR = Path(led)
+        def mod(on, key="abofles-guide@claude-plugins"):  # `on` True/False: a settings.json key; None: no settings file at all
+            shutil.rmtree(chome, ignore_errors=True)
+            if on is not None:
+                chome.mkdir(parents=True); (chome / "settings.json").write_text(json.dumps({"enabledPlugins": {key: on}}))
+        def put_md(proj, text):
+            if text is None: Path(proj, "CLAUDE.md").unlink(missing_ok=True)
+            else: Path(proj, "CLAUDE.md").write_text("## abofles overrides\n" + text)
+        pc = tempfile.mkdtemp()
+        mod(None)
+        cached_ = HG.pane_enabled
+        HG._PANE_ON.clear(); first_ = cached_(); mod(True); again_ = cached_(); HG._PANE_ON.clear(); fresh_ = cached_(); mod(None)
+        check("pane_enabled: read once per process (place() asks three times per refresh); a new process reads again", first_ is False and again_ is False and fresh_ is True)
+        HG.pane_enabled = HG.pane_enabled_uncached  # below, the files change inside this one process
+        check("pane_enabled: no settings file and no plugin cache -> off", HG.pane_enabled() is False)
+        (chome / "plugins" / "cache" / "mk" / "abofles-guide").mkdir(parents=True)
+        check("pane_enabled: no settings file, abofles-guide folder in the plugin cache -> on", HG.pane_enabled() is True)
+        mod(True); check("pane_enabled: enabledPlugins abofles-guide@… true -> on", HG.pane_enabled() is True)
+        mod(False); (chome / "plugins" / "cache" / "mk" / "abofles-guide").mkdir(parents=True)
+        check("pane_enabled: the key false wins over the cache folder -> off", HG.pane_enabled() is False)
+        mod(True, "other-mod@x"); check("pane_enabled: only another plugin's key and no cache -> off", HG.pane_enabled() is False)
+        (chome / "settings.json").write_text("{not json"); check("pane_enabled: unreadable settings and no cache -> off", HG.pane_enabled() is False)
+        mod(None); pd_ = Path(state, "plugdirs"); (pd_ / "x" / "abofles-guide").mkdir(parents=True); (pd_ / "y").mkdir()
+        os.environ["CLAUDE_CODE_PLUGIN_DIRS"] = str(pd_ / "y") + os.pathsep + str(pd_ / "x")
+        check("pane_enabled: CLAUDE_CODE_PLUGIN_DIRS names a folder holding abofles-guide, no settings -> on", HG.pane_enabled() is True)
+        os.environ["CLAUDE_CODE_PLUGIN_DIRS"] = str(pd_ / "x" / "abofles-guide")
+        check("pane_enabled: CLAUDE_CODE_PLUGIN_DIRS names the abofles-guide folder itself -> on", HG.pane_enabled() is True)
+        os.environ["CLAUDE_CODE_PLUGIN_DIRS"] = str(pd_ / "y")
+        check("pane_enabled: CLAUDE_CODE_PLUGIN_DIRS without abofles-guide -> off", HG.pane_enabled() is False)
+        os.environ["CLAUDE_CODE_PLUGIN_DIRS"] = str(pd_ / "x"); mod(False)
+        check("pane_enabled: the enabledPlugins key false wins over CLAUDE_CODE_PLUGIN_DIRS -> off", HG.pane_enabled() is False)
+        os.environ.pop("CLAUDE_CODE_PLUGIN_DIRS")
+        mod(True)
+        put_md(pc, None)
+        check("place: default is pane for guide, resume and spawns", [HG.place(pc, w) for w in ("guide", "resume", "spawns")] == ["pane"] * 3)
+        put_md(pc, "- Guide place = band\n- Resume place = output\n- Spawns place = Output\n")
+        check("place: values read from the override block (case ignored)", [HG.place(pc, w) for w in ("guide", "resume", "spawns")] == ["band", "output", "output"])
+        put_md(pc, "- Guide place = output\n- Resume place = band\n- Spawns place = nonsense\n")
+        check("place: a value that is not one of the key's two -> pane", [HG.place(pc, w) for w in ("guide", "resume", "spawns")] == ["pane"] * 3)
+        put_md(pc, "- Resume = off\n- Guide = off\n")
+        check("place: `Resume =` and `Guide =` are other keys, they do not set a place", [HG.place(pc, w) for w in ("guide", "resume", "spawns")] == ["pane"] * 3)
+        put_md(pc, "- Guide place = pane\n- Resume place = pane\n- Spawns place = pane\n")
+        mod(False)
+        check("place: without the mod guide is band and resume/spawns are output, whatever the override says", [HG.place(pc, w) for w in ("guide", "resume", "spawns")] == ["band", "output", "output"])
+        put_md(pc, None)
+        check("override_source: default when no file sets the key", HG.override_source(pc, "Pace") == (None, "default", None))
+        put_md(pc, "- Pace = fast\n")
+        uc = Path(state, "user-claude.md"); uc.write_text("## abofles overrides\n- Pace = normal\n- Break = 25\n")
+        HG.USER_CLAUDE_MD = uc
+        check("override_source: project file wins, then user, with the path", HG.override_source(pc, "Pace") == ("fast", "project", str(Path(pc, "CLAUDE.md"))) and HG.override_source(pc, "Break") == ("25", "user", str(uc)))
+        HG.USER_CLAUDE_MD = Path(os.environ["ABOFLES_USER_CLAUDE_MD"]); put_md(pc, None)
+        names = {k for k in HG.OVERRIDE_KEYS}
+        check("OVERRIDE_KEYS: every simple key of overrides.md plus the three places, each with kind, options and default",
+              names >= {"Main session", "Session cap", "Context marks", "Receipt", "Break", "Agents", "Parallel", "Agent budgets", "Questions", "Language", "Guide", "Review gate", "Resume", "Pace", "Guide place", "Resume place", "Spawns place"}
+              and all(v["kind"] in ("select", "number", "text", "list") and "default" in v and (v["kind"] == "select") == bool(v["options"]) for v in HG.OVERRIDE_KEYS.values())
+              and all(HG.OVERRIDE_KEYS[k]["default"] == "pane" for k in ("Guide place", "Resume place", "Spawns place")))
+        forms = ["Unit Test / Work = haiku·medium", "Codebase Exploration & Onboarding / Read cap = 200", "Topic: Notifications & Messaging = T3", "Reviewers: FIN = finance, security, tester",
+                 "Workflow: Code Health = Read, Work, Verify", "Review: Security / T4 = opus·xhigh", "Financial & Amount Calculations / Verify = opus·xhigh"]
+        check("COMPLEX_FORMS: every complex form of overrides.md matches one, no simple key does", all(any(r.match(f) for r in HG.COMPLEX_FORMS) for f in forms)
+              and not any(r.match(f"{k} = {v['default'] or 'x'}") for k, v in HG.OVERRIDE_KEYS.items() for r in HG.COMPLEX_FORMS))
+
+        # pane payload
+        ps = "panesess1"; pd = tempfile.mkdtemp()
+        mod(True)
+        put_md(pd, "- Pace = fast\n- Unit Test / Work = haiku·medium\n- Bogus = 1\n")
+        HG.memo_now(pd, "Task      write the pane\nLeft      tests; docs\nNext      ship it " + "x" * 700, ps)
+        HG.memo_needs(pd, ps, "owner decision: cap per unit or per order?")
+        run("start", {"session_id": ps, "cwd": pd}, led)
+        pn_ = gstate(ps).get("pane") or {}
+        check("pane: start writes the payload with v, ts, root, sid, places, resume, spawns, overrides, cmd", {"v", "ts", "root", "sid", "places", "resume", "spawns", "overrides", "cmd"} <= set(pn_) and pn_["v"] == 1 and pn_["sid"] == ps and pn_["root"] == pd)
+        check("pane: places are the effective ones (mod on -> pane)", pn_["places"] == {"guide": "pane", "resume": "pane", "spawns": "pane"})
+        rs_ = pn_["resume"] or {}
+        check("pane: resume has head, now, left, next, needs (n + text), needs_open, last", set(rs_) == {"head", "now", "left", "next", "needs", "needs_open", "last"} and rs_["now"] == ["write the pane"] and rs_["left"] == ["tests", "docs"]
+              and rs_["needs"] == [{"n": 1, "text": "owner decision: cap per unit or per order?"}] and rs_["needs_open"] == 1 and rs_["head"].startswith("📍 Resume") and "**" not in rs_["head"] and "`" not in rs_["head"] and rs_["last"] == [])
+        check("pane: resume texts are clipped to PANE_TEXT (600) characters", len(rs_["next"][0]) == HG.PANE_TEXT and rs_["next"][0].endswith("…"))
+        ov_ = pn_["overrides"]; okeys = {k["key"]: k for k in ov_["keys"]}
+        check("pane: overrides.keys has one entry per simple key with key, kind, options, value, source, default", [k["key"] for k in ov_["keys"]] == list(HG.OVERRIDE_KEYS) and all(set(k) == {"key", "kind", "options", "value", "source", "default"} for k in ov_["keys"]))
+        check("pane: a set key shows its value and source, an unset one its default", okeys["Pace"]["value"] == "fast" and okeys["Pace"]["source"] == "project" and okeys["Break"]["value"] == "10" and okeys["Break"]["source"] == "default")
+        check("pane: overrides.raw holds the lines the table cannot show (complex forms, unknown keys), files names both CLAUDE.md",
+              [r["line"] for r in ov_["raw"]] == ["Unit Test / Work = haiku·medium", "Bogus = 1"] and all(r["source"] == "project" for r in ov_["raw"]) and ov_["files"] == {"project": str(Path(pd, "CLAUDE.md")), "user": os.environ["ABOFLES_USER_CLAUDE_MD"]})
+        check("pane: cmd.overrides is the script_cmd argv prefix for overrides.py with the session", pn_["cmd"]["overrides"][:2] == ["bash", HG.posix(HG.SCRIPTS_DIR / "py")] and pn_["cmd"]["overrides"][2].endswith("/scripts/overrides.py") and pn_["cmd"]["overrides"][-2:] == ["--session", ps])
+        check("pane: spawns empty at start", pn_["spawns"] == {"live": [], "rows": [], "totals": {"spawns": 0, "tokens": 0, "usd": 0.0, "base_usd": 0.0, "saved_pct": 0, "open_fail": 0}})
+        # post: a sync spawn, a background spawn; stop closes the background one
+        okrep = "STATUS: done\nCONFIDENCE: high\nFACTS:\n- src/a.cs:1 — x\nGAPS: none"
+        pa_ = lambda **kw: dict(agent("haiku", "low", cwd=pd, **kw), session_id=ps)
+        run("post", pa_(resp=okrep), led)
+        pn_ = gstate(ps)["pane"]
+        check("pane: a sync spawn lands in spawns.rows after post, with side/model/effort/status/confidence/topic/tier/task and no live row",
+              len(pn_["spawns"]["rows"]) == 1 and pn_["spawns"]["live"] == [] and {k: pn_["spawns"]["rows"][0][k] for k in ("side", "model", "effort", "status", "topic", "tier", "task")} == {"side": "Read", "model": "haiku", "effort": "low", "status": "done", "topic": "Unit Test", "tier": 2, "task": "q"} and pn_["spawns"]["rows"][0]["confidence"] in ("high", "medium", "low")
+              and set(pn_["spawns"]["rows"][0]) == {"ts", "side", "model", "effort", "topic", "tier", "status", "confidence", "tokens", "usd", "base_usd", "description", "verdict", "task"} and pn_["spawns"]["totals"]["spawns"] == 1)
+        bgd = dict(agent("sonnet", "medium", "abofles:abofles-worker", prompt="abofles: Unit Test / W · T2\nwrite the cap test\nLine cap: 30", cwd=pd), session_id=ps, tool_response={"status": "async_launched", "agentId": "bgagent1"})
+        run("post", bgd, led)
+        pn_ = gstate(ps)["pane"]
+        check("pane: a background spawn is in live (side, model, effort, description, ts) and in rows as pending", len(pn_["spawns"]["live"]) == 1 and set(pn_["spawns"]["live"][0]) == {"side", "model", "effort", "description", "ts"}
+              and pn_["spawns"]["live"][0]["model"] == "sonnet" and pn_["spawns"]["rows"][-1]["status"] == "pending")
+        run("stop", {"session_id": ps, "cwd": pd, "agent_id": "bgagent1", "last_assistant_message": "STATUS: done\nCONFIDENCE: medium\nCHANGED:\n- a.cs — cap\nRAN: ok\nLEFT: none"}, led)
+        pn_ = gstate(ps)["pane"]
+        check("pane: SubagentStop refreshes the payload: live empties, the row is graded", pn_["spawns"]["live"] == [] and pn_["spawns"]["rows"][-1]["status"] == "done" and pn_["spawns"]["rows"][-1]["confidence"] == "medium")
+        check("pane: totals count every row; with no transcripts tokens and usd are 0", pn_["spawns"]["totals"]["spawns"] == 2 and pn_["spawns"]["totals"]["tokens"] == 0)
+        # cap and clip, from a long ledger
+        long_rows = [{"ts": 1000 + i, "side": "Read", "model": "haiku", "effort": "low", "topic": "T" * 700, "tier": 2, "status": "done", "confidence": "high", "tokens": 1000, "usd": 0.01, "base_usd": 0.04, "description": "d" * 700, "task": "t" * 700, "verdict": "PASS" if i % 2 else "FAIL"} for i in range(40)]
+        stx = {}
+        HG.refresh_pane(pd, stx, ps, long_rows)
+        px = stx["pane"]["spawns"]
+        check("pane: rows are the last 30 ledger rows, oldest first", len(px["rows"]) == 30 and px["rows"][0]["ts"] == 1010 and px["rows"][-1]["ts"] == 1039)
+        check("pane: topic, description and task are clipped to PANE_TEXT characters", all(len(r[k]) <= HG.PANE_TEXT for r in px["rows"] for k in ("topic", "description", "task")))
+        check("pane: totals are the sums over all 40 rows (as bill.py), saved_pct from the real dollars", px["totals"] == {"spawns": 40, "tokens": 40000, "usd": 0.4, "base_usd": 1.6, "saved_pct": 75, "open_fail": 0})
+        # Guide = off: the guide empties, the pane stays
+        put_md(pd, "- Guide = off\n")
+        run("prompt", {"session_id": ps, "cwd": pd}, led)
+        sx = gstate(ps)
+        check("pane: Guide = off -> st.guide is None and st.pane is still written (every guide refresh site refreshes both)", sx.get("guide") is None and sx["pane"]["spawns"]["totals"]["spawns"] == 2 and okeys is not None
+              and {k["key"]: k for k in sx["pane"]["overrides"]["keys"]}["Guide"]["value"] == "off")
+        put_md(pd, None)
+
+        # resume at start and prompt, by place
+        sf_ = Path(state, f"{ps}.json")
+        def away(min_=11):
+            j = json.loads(sf_.read_text()); j["last_activity"] = int(time.time()) - min_ * 60; sf_.write_text(json.dumps(j))
+        mod(True)
+        o_ = run("start", {"session_id": ps, "cwd": pd, "source": "compact"}, led)
+        check("resume pane: startup/compact gives Claude the block as context only (no print-verbatim note)", isinstance(o_, str) and o_.count(HG.PANE_CONTEXT_NOTE) == 1 and "do not print it" in o_ and "📍 **Resume**" in o_ and "RESUME" not in o_ and "verbatim" not in o_)
+        away(); o_ = ctx(run("prompt", {"session_id": ps, "cwd": pd}, led))
+        check("resume pane: a prompt after a break gives Claude the block as context only (do-not-print prefix, as at start)", o_.count(HG.PANE_CONTEXT_NOTE) == 1 and "do not print it" in o_ and "📍 **Resume**" in o_ and "RESUME" not in o_ and "verbatim" not in o_)
+        put_md(pd, "- Resume = off\n")
+        o_ = run("start", {"session_id": ps, "cwd": pd, "source": "compact"}, led) or ""
+        away(); o2_ = ctx(run("prompt", {"session_id": ps, "cwd": pd}, led))
+        check("resume pane: Resume = off -> no note at all, at start or after a break", "📍" not in o_ and "resume context" not in o_ and "📍" not in o2_ and "RESUME" not in o2_)
+        put_md(pd, "- Resume place = output\n")
+        o_ = run("start", {"session_id": ps, "cwd": pd, "source": "compact"}, led)
+        check("resume output: Resume place = output -> today's print-verbatim note at start", isinstance(o_, str) and "abofles RESUME (context was just compacted)" in o_ and "verbatim, first in your reply" in o_ and HG.PANE_CONTEXT_NOTE not in o_)
+        away(); o_ = ctx(run("prompt", {"session_id": ps, "cwd": pd}, led))
+        check("resume output: Resume place = output -> today's note after a break", "abofles RESUME (the user was away 11 min)" in o_ and "verbatim, first in your reply" in o_)
+        put_md(pd, None); mod(False)
+        o_ = run("start", {"session_id": ps, "cwd": pd, "source": "compact"}, led)
+        check("resume output: the mod not installed -> today's print-verbatim note whatever the place", isinstance(o_, str) and "abofles RESUME (context was just compacted)" in o_ and HG.PANE_CONTEXT_NOTE not in o_)
+        mod(True)
+
+        # bill.py --history
+        bl = subprocess.run([sys.executable, str(sdir_ := Path(__file__).resolve().parent / "bill.py"), "--history", "--session", ps, "--baseline", "opus·high"], capture_output=True, text=True,
+                            env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_SESSION=ps))
+        bl_lines = [l for l in bl.stdout.splitlines() if l.strip()]
+        check("bill --history: one line per spawn (side, status, confidence, model·effort) then the totals line", bl.returncode == 0 and len(bl_lines) == 3 and "Read" in bl_lines[0] and "done" in bl_lines[0] and "Haiku 5.5 · Low" in bl_lines[0]
+              and "Work" in bl_lines[1] and "Sonnet 5.5 · Medium" in bl_lines[1] and "medium" in bl_lines[1] and bl_lines[2].startswith("Total: 2 spawns") and "saved" in bl_lines[2])
+        check("bill --history: no summary sections (By model, Top topics)", "By model" not in bl.stdout and "Top topics" not in bl.stdout)
+        Path(led, "histsess.jsonl").write_text("".join(json.dumps(r) + "\n" for r in (
+            {"ts": 1792000000, "side": "Work", "status": "done", "confidence": "high", "model": "sonnet", "effort": "medium", "tokens": 1000, "usd": 0.01, "base_usd": 0.04, "topic": "X", "verdict": "FAIL"},
+            {"ts": 1792000060, "side": "Verify", "status": "partial", "confidence": "low", "model": "haiku", "effort": "low", "tokens": 2000, "usd": 0.03, "base_usd": 0.06, "topic": "Y"})))
+        bh = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "bill.py"), "--history", "--baseline", "opus·high"], capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_SESSION="histsess")).stdout.splitlines()
+        hl = [l for l in bh if "Work" in l or "Verify" in l]
+        check("bill --history: a row with real usage shows tokens, $ and its saved %, a row without shows dashes",
+              len(hl) == 2 and "1K tok" in hl[0] and "$0.01" in hl[0] and "saved 75%" in hl[0] and "partial" in hl[1] and "low" in hl[1] and "saved 50%" in hl[1])
+        check("bill --history: the totals line carries the same sums as the pane payload",
+              any("Total: " in l and "· 3K tokens · $0.04 (same tokens on Opus 5.5 · High: $0.10) · saved 60% · 1 open FAIL" in l for l in bh)
+              and HG.history_totals([json.loads(l) for l in Path(led, "histsess.jsonl").read_text().splitlines()]) == {"spawns": 2, "tokens": 3000, "usd": 0.04, "base_usd": 0.1, "saved_pct": 60, "open_fail": 1})
+        check("commands: /abofles:spawns runs bill.py --history; /abofles:pane names the mod and falls back to memo.py show + bill.py --history",
+              "bill.py\" --history" in (HOOK.parent.parent / "commands" / "spawns.md").read_text() and (lambda t: "abofles-guide" in t and "memo.py\" show" in t and "bill.py\" --history" in t)((HOOK.parent.parent / "commands" / "pane.md").read_text()))
+        check("commands: /abofles:pane tells the user to type /abofles-pane and prints the text only when the mod is not enabled",
+              (lambda t: "`/abofles-pane`" in t and "only when the `abofles-guide` mod is not enabled" in t)((HOOK.parent.parent / "commands" / "pane.md").read_text()))
+
+
+        # ── overrides.py: the pane editor's writer ──
+        OVP = Path(__file__).resolve().parent / "overrides.py"
+        def ovrun(args, req=None, user=None, cwd_=None):
+            env = dict(os.environ, ABOFLES_STATE_DIR=state)
+            if user: env["ABOFLES_USER_CLAUDE_MD"] = str(user)
+            return subprocess.run([sys.executable, str(OVP), *args], input=json.dumps(req) if req is not None else "", capture_output=True, text=True, env=env, cwd=cwd_)
+        def ovproj():
+            d = Path(tempfile.mkdtemp()); return d
+        P0 = "# Proj\n\nIntro - Pace = fast (prose)\n\n"
+        BLK = "## abofles overrides\n\n- Pace = normal\n- Bogus = 1\n- Unit Test / Work = haiku·medium\n- Break = 5\n\nA note about the block.\n\n"
+        TAIL = "## Other\n- Break = 99\nlast line without newline"
+        d1 = ovproj(); f1 = d1 / "CLAUDE.md"; f1.write_bytes((P0 + BLK + TAIL).encode())
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d1)], {"set": {"Pace": "fast", "Receipt": "savings 30"}})
+        t_ = f1.read_text(); head_, tail_ = (P0 + BLK).split("- Pace = normal")[0], BLK.split("- Break = 5\n")[1] + TAIL
+        check("overrides set: exit 0, prints the new overrides JSON with the value and its project source", r_.returncode == 0 and (lambda j: {k["key"]: k for k in j["keys"]}["Pace"]["value"] == "fast" and {k["key"]: k for k in j["keys"]}["Receipt"]["source"] == "project")(json.loads(r_.stdout)))
+        check("overrides set: an existing key is edited in place (same line, same neighbours)", "- Pace = fast\n- Bogus = 1\n- Unit Test / Work = haiku·medium\n- Break = 5\n" in t_)
+        check("overrides set: a new key lands after the block's last bullet, before its prose", "- Break = 5\n- Receipt = savings 30\n\nA note about the block." in t_)
+        check("overrides set: every byte outside the block's bullets is kept (prose before, prose in and after the block, the next section, no final newline)", t_.startswith(P0 + "## abofles overrides\n\n- Pace = fast") and t_.endswith(tail_) and t_.count("Intro - Pace = fast (prose)") == 1 and "- Break = 99\nlast line without newline" in t_)
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d1)], {"set": {"Pace": "", "Break": "", "Receipt": "short"}})
+        t2_ = f1.read_text()
+        check("overrides set: \"\" removes the key's line in the block only (the `Break` in `## Other` stays), the others stay", "\n- Pace" not in t2_ and "- Break = 5" not in t2_ and "- Break = 99\nlast line without newline" in t2_ and "- Receipt = short" in t2_ and "- Bogus = 1" in t2_)
+        check("overrides set: unknown keys, complex forms and prose are kept", "- Bogus = 1\n- Unit Test / Work = haiku·medium\n" in t2_ and "A note about the block." in t2_ and "Intro - Pace = fast (prose)" in t2_)
+        # hardening: a planted temp-name symlink is never written through, a CLAUDE.md linking out of the project is refused,
+        # a non-UTF-8 file and an over-long value are one-line refusals, a BOM is kept, and no temp file is left behind
+        d9 = ovproj(); victim_ = d9 / "victim.txt"; victim_.write_text("keep me\n"); (d9 / "CLAUDE.md").write_text("# P\n")
+        (d9 / "CLAUDE.md.abofles-tmp").symlink_to(victim_)
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d9)], {"set": {"Pace": "fast"}})
+        check("overrides hardening: a symlink at the old temp name is not written through (the temp is a fresh mkstemp file)", r_.returncode == 0 and victim_.read_text() == "keep me\n" and "- Pace = fast" in (d9 / "CLAUDE.md").read_text() and not (d9 / "CLAUDE.md").is_symlink())
+        check("overrides hardening: no temp file is left in the folder", not [x for x in d9.iterdir() if x.name.endswith(".abofles-tmp") and not x.is_symlink()])
+        d10 = ovproj(); out_ = Path(tempfile.mkdtemp()) / "outside.md"; out_.write_text("# outside\n"); (d10 / "CLAUDE.md").symlink_to(out_)
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d10)], {"set": {"Pace": "fast"}})
+        check("overrides hardening: a project CLAUDE.md that links out of the project is refused (exit 2), the target untouched", r_.returncode == 2 and "outside the project" in r_.stderr and out_.read_text() == "# outside\n")
+        d11 = ovproj(); (d11 / "CLAUDE.md").write_bytes(b"# P\n\xff\xfe bad\n")
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d11)], {"set": {"Pace": "fast"}})
+        check("overrides hardening: a CLAUDE.md that is not UTF-8 gives one line and exit 2, no traceback", r_.returncode == 2 and "not UTF-8" in r_.stderr and "Traceback" not in r_.stderr)
+        d12 = ovproj(); (d12 / "CLAUDE.md").write_bytes(b"\xef\xbb\xbf# P\n\n## abofles overrides\n\n- Pace = normal\n")
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d12)], {"set": {"Pace": "fast"}})
+        check("overrides hardening: a UTF-8 BOM is kept and the block under the first heading is still found", r_.returncode == 0 and (d12 / "CLAUDE.md").read_bytes() == b"\xef\xbb\xbf# P\n\n## abofles overrides\n\n- Pace = fast\n")
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d12)], {"set": {"Language": "x" * 600}})
+        r2_ = ovrun(["set", "--scope", "project", "--cwd", str(d12)], {"set": {}, "raw": ["Topic: " + "y" * 600 + " = T3"]})
+        check("overrides hardening: a value or a line over 500 characters is refused (exit 2)", r_.returncode == 2 and "longer than 500" in r_.stderr and r2_.returncode == 2 and "longer than 500" in r2_.stderr)
+        if os.name != "nt":
+            pdir_ = Path(tempfile.mkdtemp()) / "st"; pdir_.mkdir(mode=0o755); os.chmod(pdir_, 0o755); HG.private_dir(pdir_); nd_ = Path(tempfile.mkdtemp()) / "a" / "b"; HG.private_dir(nd_)
+            check("state and ledger folders are owner-only: an older 755 folder is tightened, a new one is made 700", pdir_.stat().st_mode & 0o777 == 0o700 and nd_.stat().st_mode & 0o777 == 0o700)
+        before_ = f1.read_bytes(); r_ = ovrun(["set", "--scope", "project", "--cwd", str(d1)], {"set": {"Pace": ""}})
+        check("overrides set: removing a key that is not there changes nothing", r_.returncode == 0 and f1.read_bytes() == before_)
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d1)], {"set": {}, "raw": ["Topic: Billing = T3", "- Reviewers: FIN = tester"]})
+        t3_ = f1.read_text()
+        check("overrides set: raw lines replace only the complex-form lines (the old cell form goes), unknown key and simple keys stay", r_.returncode == 0 and "Unit Test / Work" not in t3_ and "- Topic: Billing = T3\n" in t3_ and "- Reviewers: FIN = tester\n" in t3_ and "- Bogus = 1" in t3_ and "- Receipt = short" in t3_ and "A note about the block." in t3_)
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d1)], {"set": {}, "raw": ["Topic: Billing = T3", "Reviewers: FIN = tester"]})
+        r_ = ovrun(["set", "--scope", "project", "--cwd", str(d1)], {"set": {}, "raw": ["Bogus = 1", "Topic: Billing = T3", "Reviewers: FIN = tester"]})
+        check("overrides set: an unknown line the pane lists with the forms may stay in raw (kept once, in place)", r_.returncode == 0 and f1.read_text() == t3_ and f1.read_text().count("- Bogus = 1") == 1)
+        check("overrides set: the same raw lines again change nothing", r_.returncode == 0 and f1.read_text() == t3_)
+        d2 = ovproj()
+        check("overrides set: no CLAUDE.md yet -> the project's CLAUDE.md is created with the block", ovrun(["set", "--scope", "project", "--cwd", str(d2)], {"set": {"Guide place": "band"}}).returncode == 0 and (d2 / "CLAUDE.md").read_text() == "## abofles overrides\n\n- Guide place = band\n")
+        d3 = ovproj(); (d3 / "CLAUDE.md").write_bytes(b"# T\r\nbody\r\n"); ovrun(["set", "--scope", "project", "--cwd", str(d3)], {"set": {"Pace": "fast"}})
+        check("overrides set: a file without the block gets it appended after a blank line, the old bytes (CRLF too) kept", (d3 / "CLAUDE.md").read_bytes() == b"# T\r\nbody\r\n\r\n## abofles overrides\r\n\r\n- Pace = fast\r\n")
+        d3b = ovproj(); (d3b / "CLAUDE.md").write_text("# T\nbody"); ovrun(["set", "--scope", "project", "--cwd", str(d3b)], {"set": {"Pace": "fast"}})
+        check("overrides set: ... and \"\\n## abofles overrides\\n\\n\" when the file did not end with a newline", (d3b / "CLAUDE.md").read_text() == "# T\nbody\n\n## abofles overrides\n\n- Pace = fast\n")
+        d3c = ovproj(); (d3c / "CLAUDE.md").write_text("# T\n"); ovrun(["set", "--scope", "project", "--cwd", str(d3c)], {"set": {"Pace": ""}})
+        check("overrides set: removing from a file without a block does not create one", (d3c / "CLAUDE.md").read_text() == "# T\n")
+        d4 = ovproj(); (d4 / ".claude").mkdir(); (d4 / "CLAUDE.md").write_text("# no block here\n"); (d4 / ".claude" / "CLAUDE.md").write_text("# T\n\n## Abofles Overrides\n- Pace = fast\n")
+        ovrun(["set", "--scope", "project", "--cwd", str(d4)], {"set": {"Break": "7"}})
+        check("overrides set: project scope picks .claude/CLAUDE.md when it holds the block (heading case ignored), CLAUDE.md untouched",
+              (d4 / ".claude" / "CLAUDE.md").read_text() == "# T\n\n## Abofles Overrides\n- Pace = fast\n- Break = 7\n" and (d4 / "CLAUDE.md").read_text() == "# no block here\n")
+        check("overrides: the pane's files.project is the file the writer picks (.claude/CLAUDE.md when it holds the block)", json.loads(ovrun(["get", "--json", "--cwd", str(d4)]).stdout)["files"]["project"] == str(d4 / ".claude" / "CLAUDE.md")
+              and json.loads(ovrun(["get", "--json", "--cwd", str(d2)]).stdout)["files"]["project"] == str(d2 / "CLAUDE.md"))
+        d5 = ovproj(); uf = Path(tempfile.mkdtemp()) / "sub" / "CLAUDE.md"
+        r_ = ovrun(["set", "--scope", "user", "--cwd", str(d5)], {"set": {"Language": "Arabic"}}, user=uf)
+        check("overrides set: user scope writes ABOFLES_USER_CLAUDE_MD (parent folder created), not the project", r_.returncode == 0 and uf.read_text() == "## abofles overrides\n\n- Language = Arabic\n" and not (d5 / "CLAUDE.md").exists()
+              and json.loads(r_.stdout)["files"]["user"] == str(uf) and {k["key"]: k for k in json.loads(r_.stdout)["keys"]}["Language"]["source"] == "user")
+        check("overrides: no atomic leftovers (the .abofles-tmp file is renamed away)", not list(uf.parent.glob("*.abofles-tmp")) and not list(d1.glob("*.abofles-tmp")))
+        bad = [({"Receipt": "everything"}, "Receipt"), ({"Receipt": "savings x"}, "Receipt"), ({"Break": "soon"}, "Break"), ({"Agents": "many"}, "Agents"), ({"Pace": "turbo"}, "Pace"),
+               ({"Agent budgets": "1, 2, 3"}, "Agent budgets"), ({"Context marks": "a, b"}, "Context marks"), ({"Nope": "1"}, "Nope"), ({"Language": "Ara\nbic"}, "Language")]
+        d6 = ovproj(); (d6 / "CLAUDE.md").write_text("## abofles overrides\n- Pace = fast\n"); b6_ = (d6 / "CLAUDE.md").read_bytes()
+        rs_ = [ovrun(["set", "--scope", "project", "--cwd", str(d6)], {"set": dict(sets_, Parallel="4")}) for sets_, _ in bad]
+        check("overrides set: invalid values (bad option, savings x, Break soon, Agents many, short budgets, non-numbers, unknown key, two lines) exit 2 with one line naming the key",
+              all(r.returncode == 2 and len(r.stderr.strip().splitlines()) == 1 and k in r.stderr for r, (_, k) in zip(rs_, bad)) and all(r.stdout == "" for r in rs_))
+        check("overrides set: ... and nothing is written, not even the valid key sent along", (d6 / "CLAUDE.md").read_bytes() == b6_)
+        for req_ in ({"set": {}, "raw": ["Topic: Billing"]}, {"set": {}, "raw": ["Pace = fast"]}):
+            check(f"overrides set: raw line {req_['raw'][0]!r} (not a complex form / a simple key) exits 2", ovrun(["set", "--scope", "project", "--cwd", str(d6)], req_).returncode == 2)
+        check("overrides set: not JSON on stdin / no scope exit 2", ovrun(["set", "--scope", "project", "--cwd", str(d6)]).returncode == 2 and ovrun(["set", "--cwd", str(d6)], {"set": {}}).returncode == 2)
+        good = [("Agents", "AUTO", "auto"), ("Receipt", "savings 30", "savings 30"), ("Break", "off", "off"), ("Context marks", "100,150, 180", "100, 150, 180"), ("Agent budgets", "1, 2, 5, 8", "1, 2, 5, 8")]
+        d7 = ovproj()
+        ok7_ = ovrun(["set", "--scope", "project", "--cwd", str(d7)], {"set": {k: v for k, v, _ in good}}).returncode == 0 and ovrun(["set", "--scope", "project", "--cwd", str(d7)], {"set": {"Agents": 7}}).returncode == 0
+        ok7_ = ok7_ and ovrun(["set", "--scope", "project", "--cwd", str(d7)], {"set": {"Agents": "auto"}}).returncode == 0
+        t7_ = (d7 / "CLAUDE.md").read_text()
+        check("overrides set: Agents N/auto, Receipt `savings N`, Break off, lists of numbers are accepted and written normalised", ok7_ and all(f"- {k} = {w}\n" in t7_ for k, _, w in good))
+        # a change between our read and our write: abort, exit 3, nothing written
+        import importlib.util as _iuo
+        _so = _iuo.spec_from_file_location("abofles_overrides_race", str(OVP)); OVM = _iuo.module_from_spec(_so); _so.loader.exec_module(OVM)
+        dr = ovproj(); fr = dr / "CLAUDE.md"; fr.write_text("## abofles overrides\n- Pace = fast\n")
+        _edit = OVM.edit_text
+        def _racing(old, sets, raw):
+            out = _edit(old, sets, raw); fr.write_text("## abofles overrides\n- Pace = fast\n- Break = 7\n"); return out  # another writer lands between read and write
+        OVM.edit_text = _racing
+        _argv, _stdin, _env = sys.argv, sys.stdin, os.environ.get("ABOFLES_STATE_DIR")
+        sys.argv = ["overrides.py", "set", "--scope", "project", "--cwd", str(dr)]; sys.stdin = io.StringIO(json.dumps({"set": {"Pace": "normal"}})); os.environ["ABOFLES_STATE_DIR"] = state
+        _err, _out = io.StringIO(), io.StringIO()
+        import contextlib as _cl
+        with _cl.redirect_stderr(_err), _cl.redirect_stdout(_out):
+            rc_ = OVM.main()
+        sys.argv, sys.stdin = _argv, _stdin
+        if _env is None: os.environ.pop("ABOFLES_STATE_DIR", None)
+        else: os.environ["ABOFLES_STATE_DIR"] = _env
+        check("overrides set: the file changed between read and write -> exit 3, the other writer's bytes stay, no temp file left, one stderr line",
+              rc_ == 3 and fr.read_text() == "## abofles overrides\n- Pace = fast\n- Break = 7\n" and not list(dr.glob("*.abofles-tmp"))
+              and _err.getvalue() == "abofles: CLAUDE.md changed while saving — reload the pane and save again\n" and _out.getvalue() == "")
+        # get, and the pane payload after a set
+        g_ = ovrun(["get", "--json", "--cwd", str(d7)])
+        check("overrides get --json: prints the pane's overrides payload (files, keys with kind/options/value/source/default, raw)", g_.returncode == 0 and (lambda j: set(j) == {"files", "keys", "raw"} and [k["key"] for k in j["keys"]] == list(HG.OVERRIDE_KEYS) and {k["key"]: k for k in j["keys"]}["Agents"]["value"] == "auto")(json.loads(g_.stdout)))
+        ds = ovproj(); ss = "ovsess1"; (ds / "CLAUDE.md").write_text("## abofles overrides\n- Pace = fast\n")
+        run("start", {"session_id": ss, "cwd": str(ds)}, led)
+        stamp_ = gstate(ss)["pane"]["ts"]; time.sleep(0)  # the session's state exists; the pane is refreshed by the set
+        r_ = ovrun(gstate(ss)["pane"]["cmd"]["overrides"][3:] + ["set", "--scope", "project", "--cwd", str(ds)], {"set": {"Pace": "normal", "Guide place": "band"}})  # the argv the pane runs: `overrides.py --session S set --scope …`
+        pk_ = {k["key"]: k for k in gstate(ss)["pane"]["overrides"]["keys"]}
+        check("overrides set: with a session, the state's pane payload is refreshed under the lock (value, source and places follow) and the output is the same overrides",
+              r_.returncode == 0 and pk_["Pace"]["value"] == "normal" and pk_["Guide place"]["value"] == "band" and gstate(ss)["pane"]["places"]["guide"] == "band" and json.loads(r_.stdout) == gstate(ss)["pane"]["overrides"])
+        check("overrides set: ... the session's other state (cmd argv, root, sid) is kept", gstate(ss)["pane"]["cmd"]["overrides"][-2:] == ["--session", ss] and gstate(ss)["pane"]["sid"] == ss)
+        rd_ = (HOOK.parent.parent / "README.md").read_text()
+        sec_ = rd_[rd_.index("### Overrides"):]
+        check("README: the Overrides table lists every OVERRIDE_KEYS key", all(f"| `{k}` |" in sec_ for k in HG.OVERRIDE_KEYS))
+        form_marks = ["Topic / Side cap", "Topic / Side =", "Topic: Name", "Reviewers:", "Workflow:", "Review: <Tag>"]  # COMPLEX_FORMS order
+        check("README: ... and every COMPLEX_FORMS form (one row each)", len(form_marks) == len(HG.COMPLEX_FORMS) and all(re.search(r"^\| `" + re.escape(m), sec_, re.M) for m in form_marks))
+        check("README: ... with defaults from the code, the pane editor, /abofles:pane and /abofles:spawns", all(f"| `{k}` |" in sec_ and (v["default"] in sec_ if v["default"] else True) for k, v in HG.OVERRIDE_KEYS.items()) and "/abofles:pane" in sec_ and "/abofles:spawns" in sec_ and "pane" in sec_.split("| `Main session`")[0])
+        check("overrides.md: the three place forms are described and the form count matches the code", all(f"`{w} place = " in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() for w in ("Guide", "Resume", "Spawns"))
+              and f"Twenty-three forms" in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() and len(HG.OVERRIDE_KEYS) + len(HG.COMPLEX_FORMS) == 23)
 
     print(f"\n{'ALL PASS' if not fails else f'{fails} FAILED'}")
     sys.exit(1 if fails else 0)
