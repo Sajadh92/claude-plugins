@@ -414,6 +414,7 @@ OVERRIDE_KEYS = {
     "Guide place": {"kind": "select", "options": ["pane", "band"], "default": "pane"},
     "Resume place": {"kind": "select", "options": ["pane", "output"], "default": "pane"},
     "Spawns place": {"kind": "select", "options": ["pane", "output"], "default": "pane"},
+    "Receipt place": {"kind": "select", "options": ["pane", "output"], "default": "pane"},  # pane: the receipt is recorded by a command, not printed
 }
 _SIDES = r"(?:Read|Analy[sz]e|Plan|Work|Verify|Judge|Explain)"
 # The forms with a free-form name in them: no row of their own in the pane, listed as raw lines. Matched against the line without its leading `- `.
@@ -473,8 +474,8 @@ def pane_enabled_uncached():
 
 
 def place(cwd, what):
-    """Where a thing is shown: `guide` -> pane | band, `resume` and `spawns` -> pane | output (`- Guide place = …` in the override block;
-    default and any unknown value: pane). Without the abofles-guide mod there is no pane: guide -> band, resume and spawns -> output."""
+    """Where a thing is shown: `guide` -> pane | band, `resume`, `spawns` and `receipt` -> pane | output (`- Guide place = …` in the override
+    block; default and any unknown value: pane). Without the abofles-guide mod there is no pane: guide -> band, the rest -> output."""
     v = (override_value(cwd, f"{what.capitalize()} place") or "pane").strip().lower()
     if not pane_enabled():
         return "band" if what == "guide" else "output"
@@ -565,10 +566,16 @@ RECEIPT_FULL = ("Receipt at task end — plain markdown, no code block:\n"
                 "- `check` → <command → decisive result>\n- `open` → <follow-ups: partial, low, ATTENTION, open FAIL, owner decisions — or none>{guide}\n"
                 "A field with 2+ items: nothing after the arrow, one indented `  - <item>` sub-bullet per item, never a long `;` line.")
 RECEIPT_SHORT = "Receipt at task end — one plain-markdown line: {header} · open: <follow-ups or none>{guide_short}"
+# `Receipt place = pane` (the default with the abofles-guide mod): the receipt is recorded by one command, not printed — the chat keeps
+# one collapsed command row, the pane (Resume › Last receipts) and the memo get it all. The Stop hook reads it back (receipt_saved).
+RECEIPT_RECORD = ("Receipt at task end — record it, do NOT print it in the chat (Receipt place = pane: it shows in the Abo Fles pane). "
+                  "Run this one command, then end the turn with one short plain sentence:\n"
+                  "{cmd} <<'EOF'\n{body}\nEOF")
 
 
-def receipt_decision(cwd, st):
-    """(kind, instruction) for this task: kind is full, short or skip."""
+def receipt_decision(cwd, st, sid=""):
+    """(kind, instruction) for this task: kind is full, short or skip. With `Receipt place = pane` the instruction asks for the same
+    receipt recorded by `memo.py receipt` (stdin) instead of printed."""
     mode, thr = receipt_mode(cwd)
     header = receipt_header(st)
     if mode == "off" or (mode == "savings" and task_saving(st) < thr):
@@ -576,8 +583,15 @@ def receipt_decision(cwd, st):
         return "skip", f"abofles: no receipt for this task ({why}). Still name any open follow-up (partial, low, ATTENTION, open FAIL) in prose."
     g = (st.get("guide") or {}).get("line") if guide_on(cwd) else ""
     if mode == "short":
-        return "short", "abofles: " + RECEIPT_SHORT.format(header=header, guide_short=f" · {g}" if g else "")
-    return "full", "abofles: " + RECEIPT_FULL.format(header=header, guide=f"\n- `next` → {g} (copy as given)" if g else "")
+        kind, text = "short", RECEIPT_SHORT.format(header=header, guide_short=f" · {g}" if g else "")
+    else:
+        kind, text = "full", RECEIPT_FULL.format(header=header, guide=f"\n- `next` → {g} (copy as given)" if g else "")
+    if place(cwd, "receipt") == "pane":
+        body = text.split("\n", 1)[1] if "\n" in text else text.split(": ", 1)[1]  # the receipt lines, without their print instruction
+        body = "\n".join(l for l in body.splitlines() if not l.startswith("A field with 2+"))
+        cmd = shell_cmd("memo.py", "receipt", *(["--session", sid] if sid else []))
+        text = RECEIPT_RECORD.format(cmd=cmd, body=body) + "\nA field with 2+ items: nothing after the arrow, one indented `  - <item>` sub-bullet per item."
+    return kind, "abofles: " + text
 
 
 def reset_task(st):
@@ -885,17 +899,29 @@ def history_totals(rows, base_model="opus", base_effort="high"):
     for r in rows:
         if r.get("verdict") == "PASS" and fails.get(r.get("topic")):
             fails.pop(r.get("topic"))
-        elif r.get("verdict") == "FAIL":
+        elif r.get("verdict") == "FAIL" and not r.get("resolved"):  # a FAIL resolved by hand (status.py --resolve, with evidence) is closed
             fails[r.get("topic")] = fails.get(r.get("topic"), 0) + 1
+    models = {}
+    for r in rows:  # spend per model, cheapest first: the pane's swatch table
+        m = (r.get("model") or "?").lower()
+        e = models.setdefault(m, {"model": m, "label": label(m), "spawns": 0, "usd": 0.0})
+        e["spawns"] += 1
+        e["usd"] += r.get("usd") or 0.0
+    order = list(MODEL_LABEL)
+    by_model = sorted(models.values(), key=lambda e: (order.index(e["model"]) if e["model"] in order else len(order), e["model"]))
+    for e in by_model:
+        e["usd"] = round(e["usd"], 4)
+        e["pct"] = round(100 * e["usd"] / cost) if cost else round(100 * e["spawns"] / len(rows)) if rows else 0
     return {"spawns": len(rows), "tokens": sum(r["tokens"] for r in real), "usd": round(cost, 4), "base_usd": round(base, 4),
-            "saved_pct": round(100 * (1 - cost / base)) if base else round(100 * (1 - u / ub)) if ub else 0, "open_fail": sum(fails.values())}
+            "saved_pct": round(100 * (1 - cost / base)) if base else round(100 * (1 - u / ub)) if ub else 0, "open_fail": sum(fails.values()),
+            "base_label": label(base_model), "by_model": by_model}
 
 
 def pane_row(r):
     c = lambda x: clip(x, PANE_TEXT) if isinstance(x, str) else x
     return {"ts": r.get("ts"), "side": r.get("side"), "model": r.get("model"), "effort": r.get("effort"), "topic": c(r.get("topic")), "tier": r.get("tier"),
             "status": r.get("status"), "confidence": r.get("confidence"), "tokens": r.get("tokens"), "usd": r.get("usd"), "base_usd": r.get("base_usd"),
-            "description": c(r.get("description")), "verdict": c(r.get("verdict")), "task": c(r.get("task"))}
+            "description": c(r.get("description")), "verdict": c(r.get("verdict")), "task": c(r.get("task")), "resolved": bool(r.get("resolved"))}
 
 
 def pane_resume(root, sid):
@@ -3328,7 +3354,7 @@ def post(data):
         except Exception:
             pass
         refresh_guide(root, st, data.get("session_id", ""))
-        _, instruction = receipt_decision(root, st)
+        _, instruction = receipt_decision(root, st, data.get("session_id", ""))
         budget, bsrc = task_budget(root, st, entry.get("tier"))
         used, total = budget_used(st), st.get("spawns", 0)
         if not tier and not is_async and (stype or "").startswith("abofles:") and kind not in ("judge", "explainer"):
@@ -3644,7 +3670,7 @@ def prompt(data):
                 rn = f"{PANE_CONTEXT_NOTE}\n\n{block}" if place(cwd, "resume") == "pane" else resume_note(block, f"the user was away {span(away)}")
         if "<task-notification" in ptxt[:200] and st.get("spawns_since_receipt") and not background_running(sid):
             st["running_bg"] = 0  # the chain just ended: a background launch carried no receipt note, so the header is given now
-            kind, instruction = receipt_decision(cwd, st)
+            kind, instruction = receipt_decision(cwd, st, sid)
             if kind != "skip":
                 bn = instruction
         save_state(sid, st)
@@ -3737,6 +3763,10 @@ def receipt(data):
     sid = data.get("session_id", "")
     text = data.get("last_assistant_message") or ""
     reasons = []
+    if not (has_receipt(text) or looks_like_receipt(text)):  # Receipt place = pane: the receipt was recorded this turn by `memo.py receipt`
+        saved = load_state(sid).get("receipt_saved") or {}
+        if saved.get("text") and (saved.get("ts") or 0) >= (load_state(sid).get("turn_ts") or 0) - 5:
+            text = saved["text"]
     own = has_receipt(text)
     foreign = not own and looks_like_receipt(text)  # the model's own header: it closes the task like the computed one, the journal gets the computed header
     rc = parse_receipt(text) if own or foreign else None
@@ -3746,6 +3776,7 @@ def receipt(data):
             return
         st["last_activity"] = int(time.time())
         st["inflight"], st["inflight_bg"] = 0, 0  # no Agent call outlives the turn: a failed call never ran its post
+        st.pop("receipt_saved", None)  # read above, used once
         refresh_main_model(data, st)
         root = project_root(data, st)
         close_stale_pending(st, sid, root)
@@ -3778,7 +3809,7 @@ def receipt(data):
             if gap and gap["missing"] and gap["mode"] != "off":
                 st["review_missing"] = {"names": gap["missing"], "tier": gap["tier"], "topic": gap["topics"][0], "ts": int(time.time())}  # the guide shows it until the next task starts
         elif pending and not refused and not background_running(sid):  # a chain still running: the receipt is due when it ends
-            kind, instruction = receipt_decision(root, st)
+            kind, instruction = receipt_decision(root, st, sid)
             owed = bool(st.get("receipt_owed"))  # a nudge went unanswered, or the last turn ended on a question: this Stop asks again
             if ends_with_question(text) and not owed:
                 if kind != "skip":

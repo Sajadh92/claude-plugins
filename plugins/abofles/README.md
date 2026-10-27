@@ -156,6 +156,7 @@ Every form the block reads, project `CLAUDE.md` first, then `~/.claude/CLAUDE.md
 | `Guide place` | pane, band | pane | Where the guide shows: the Abo Fles pane, or the band above the prompt. Without the mod: band. |
 | `Resume place` | pane, output | pane | Where the resume block shows: the pane, or printed in the chat (`/abofles:resume`). Without the mod: output. A client that draws no pane though the mod is installed (`claude -p`, the SDK) wants `output`. |
 | `Spawns place` | pane, output | pane | Where the spawn history shows: the pane, or printed in the chat (`/abofles:spawns`). Without the mod: output. |
+| `Receipt place` | pane, output | pane | Where the task-end receipt goes: recorded by one command (`memo.py receipt`) and shown in the pane (Resume › Last receipts) and the memo, or printed in the chat. Without the mod: output. |
 | `Topic / Side = model·effort` | model·effort | the matrix cell | One cell of the matrix for this project. |
 | `Topic / Side cap = N` | N lines | the matrix cap | The reply cap of one cell. |
 | `Topic: Name = T#` | T1..T4 | the topic's tier | Moves a topic to another tier. |

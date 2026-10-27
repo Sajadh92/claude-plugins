@@ -54,10 +54,13 @@ export type PaneRow = {
   base_usd: number | null
   description: string
   verdict: string | null
-  task: string | null // the task the spawn belongs to; rows are grouped by it
+  task: string | null // the first line of the spawn's prompt
+  resolved: boolean // a FAIL closed by hand with evidence (status.py --resolve)
 }
 
-export type PaneTotals = { spawns: number; tokens: number; usd: number; base_usd: number; saved_pct: number; open_fail: number }
+export type PaneModel = { model: string; label: string; spawns: number; usd: number; pct: number } // pct: share of the spend
+
+export type PaneTotals = { spawns: number; tokens: number; usd: number; base_usd: number; saved_pct: number; open_fail: number; base_label: string; by_model: PaneModel[] }
 
 export type PaneSpawns = { live: PaneLive[]; rows: PaneRow[]; totals: PaneTotals } // rows: the last 30, oldest first
 

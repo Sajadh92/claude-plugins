@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
-import type { Guide, GuideItem, Pane, PaneLive, PaneOverrideKey, PaneOverrides, PanePlaces, PaneResume, PaneRow, PaneSpawns, PaneTotals } from '../types'
+import type { Guide, GuideItem, Pane, PaneLive, PaneModel, PaneOverrideKey, PaneOverrides, PanePlaces, PaneResume, PaneRow, PaneSpawns, PaneTotals } from '../types'
 
 // What the band (register.tsx) and the pane (pane.tsx) share: the state atoms, the cleaning of the state file's
 // `guide` and `pane`, the refresh, and the guide's actions and buttons, so both places run the same code.
@@ -130,21 +130,23 @@ export const plain = (text: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
-// A card in the look of the desktop app's own side panels (Context, Changes, Environment): a rounded dim border; a header
-// row whose left part, the title and a chevron (› folded, ⌄ open), is one plain button that folds the card, and whose right
-// part is a short summary (in `tone`, a theme key, or dim); the body only while the card is open. `id` names the fold (see isOpen).
+// A card in the look of the desktop app's own side panels (Context, Changes, Environment): a rounded dim border; a header row
+// whose left part, the title and its caret (▾ open, › folded), is one plain button that folds the card, and whose right part
+// is a short summary, dim or in `tone` (a theme key) with a dot before it; the body only while the card is open. `id` names the
+// fold (see isOpen). Folded, the card is that one row.
 export function card($: EngineInterface, ui: Ui, c: { id: string; title: string; summary?: string | null; tone?: string; folds: Folds; def?: boolean }, body: JSX.Element | (JSX.Element | null)[]) {
   const { Box, Button, Text } = ui
   const open = isOpen(c.folds, c.id, c.def ?? true)
   return (
-    <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1} rowGap={1}>
+    <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={2} paddingY={1} rowGap={1}>
       <Box flexDirection="row" justifyContent="space-between" alignItems="center" columnGap={1}>
         <Button key={`fold:${c.id}`} plain onPress={() => setFold($, c.id, !open)}>
-          <Text weight="semibold">{c.title}</Text>
-          <Text dimColor>{open ? ' ⌄' : ' ›'}</Text>
+          <Text weight="medium">{c.title}</Text>
+          <Text dimColor>{open ? ' ▾' : ' ›'}</Text>
         </Button>
         {c.summary ? (
-          <Box flexShrink={1}>
+          <Box flexDirection="row" columnGap={1} flexShrink={1}>
+            {c.tone ? <Text color={c.tone}>●</Text> : null}
             {c.tone ? <Text color={c.tone}>{c.summary}</Text> : <Text dimColor>{c.summary}</Text>}
           </Box>
         ) : null}
@@ -162,7 +164,88 @@ export function kv(ui: Ui, label: string, value: string, tone?: string) {
       <Box flexShrink={1}>
         <Text>{label}</Text>
       </Box>
-      {tone ? <Text color={tone}>{value}</Text> : <Text dimColor>{value}</Text>}
+      {tone ? <Text color={tone}>{value}</Text> : <Text dimColor tabular>{value}</Text>}
+    </Box>
+  )
+}
+
+// A small dim heading inside a card, with an optional count or note at the right (in `tone`, or dim).
+export function heading(ui: Ui, text: string, right?: string, tone?: string) {
+  const { Box, Text } = ui
+  return (
+    <Box flexDirection="row" justifyContent="space-between" columnGap={1}>
+      <Text size="caption" dimColor>
+        {text}
+      </Text>
+      {right ? (
+        tone ? (
+          <Text size="caption" color={tone}>
+            {right}
+          </Text>
+        ) : (
+          <Text size="caption" dimColor>
+            {right}
+          </Text>
+        )
+      ) : null}
+    </Box>
+  )
+}
+
+// The inner width of a card in cells: the pane body less the border (2) and the padding (4). Unknown width: 40.
+export const innerWidth = (cols?: number): number => Math.max(12, (typeof cols === 'number' ? cols : 46) - 6)
+
+// The hex of a tone for SVG, which cannot name a theme key: the theme's red, amber and green as the app draws them.
+const HEX: Record<string, string> = { error: '#e5675e', warning: '#e3a33b', success: '#63c174' }
+const hexOf = (color: string): string => HEX[color] ?? color
+
+// How wide a card's inside is in cells, and whether the surface draws SVG (every one but the terminal), from the render event.
+export type Look = { width: number; svg: boolean }
+export const lookOf = (e: RenderEvent): Look => ({ width: innerWidth((e.props as { bodyColumns?: number }).bodyColumns), svg: e.surface !== 'terminal' })
+
+// A drawing as wide as the card at a fixed height in px, where the surface draws SVG: the markup is 1200 wide and stretched
+// (preserveAspectRatio none), so it fills the card at any pane width without wrapping. Null in the terminal.
+function strip(ui: Ui, look: Look, height: number, alt: string, body: string) {
+  if (!look.svg || !('Svg' in ui) || !ui.Svg) return null
+  const { Svg } = ui
+  return <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="${height}" viewBox="0 0 1200 ${height}" preserveAspectRatio="none">${body}</svg>`} alt={alt} height={height} />
+}
+
+// A thin rule across the card: 1 px on the desktop, a row of ─ in the terminal (whose cells are exact).
+export function rule(ui: Ui, look: Look) {
+  const { Text } = ui
+  return strip(ui, look, 1, 'divider', '<rect width="1200" height="1" fill="#808080" fill-opacity="0.3"/>') ?? <Text dimColor>{'─'.repeat(look.width)}</Text>
+}
+
+// A meter as the app draws one: coloured segments (percent of the width each) on a dim track — 4 px with 2 px gaps on the
+// desktop, a row of ━ in the terminal. `alt` says what it shows.
+export function bar(ui: Ui, look: Look, parts: { pct: number; color: string }[], alt: string) {
+  const width = look.width
+  const { Box, Text } = ui
+  const clamp = (n: number) => Math.max(0, Math.min(100, n))
+  let x = 0
+  const rects = parts
+    .filter(p => clamp(p.pct) > 0)
+    .map(p => {
+      const w = Math.max(4, (1200 * clamp(p.pct)) / 100 - 4)
+      const r = `<rect x="${x.toFixed(1)}" width="${Math.min(w, 1200 - x).toFixed(1)}" height="4" rx="2" fill="${hexOf(p.color)}"/>`
+      x += w + 4
+      return x <= 1204 ? r : ''
+    })
+    .join('')
+  const svg = strip(ui, look, 4, alt, `<rect width="1200" height="4" rx="2" fill="#808080" fill-opacity="0.25"/>${rects}`)
+  if (svg) return svg
+  let used = 0
+  const segs = parts.map(p => {
+    const n = Math.max(p.pct > 0 ? 1 : 0, Math.round((width * clamp(p.pct)) / 100))
+    const cells = Math.min(n, width - used)
+    used += cells
+    return cells > 0 ? <Text color={p.color}>{'━'.repeat(cells)}</Text> : null
+  })
+  return (
+    <Box flexDirection="row">
+      {segs}
+      {width - used > 0 ? <Text dimColor>{'━'.repeat(width - used)}</Text> : null}
     </Box>
   )
 }
@@ -284,7 +367,13 @@ function cleanRow(v: unknown): PaneRow | null {
     description: strOr(v.description, ''),
     verdict: strOrNull(v.verdict),
     task: isStr(v.task) && v.task ? v.task : null,
+    resolved: v.resolved === true,
   }
+}
+
+function cleanModel(v: unknown): PaneModel | null {
+  if (!isObj(v) || !isStr(v.model)) return null
+  return { model: v.model, label: strOr(v.label, v.model), spawns: isNum(v.spawns) ? v.spawns : 0, usd: isNum(v.usd) ? v.usd : 0, pct: isNum(v.pct) ? v.pct : 0 }
 }
 
 function cleanSpawns(raw: unknown): PaneSpawns {
@@ -292,7 +381,8 @@ function cleanSpawns(raw: unknown): PaneSpawns {
   const live = Array.isArray(s.live) ? s.live.map(cleanLive).filter((r): r is PaneLive => r !== null) : []
   const rows = Array.isArray(s.rows) ? s.rows.map(cleanRow).filter((r): r is PaneRow => r !== null) : []
   const t = isObj(s.totals) ? s.totals : {}
-  const totals: PaneTotals = { spawns: isNum(t.spawns) ? t.spawns : rows.length, tokens: isNum(t.tokens) ? t.tokens : 0, usd: isNum(t.usd) ? t.usd : 0, base_usd: isNum(t.base_usd) ? t.base_usd : 0, saved_pct: isNum(t.saved_pct) ? t.saved_pct : 0, open_fail: isNum(t.open_fail) ? t.open_fail : 0 }
+  const byModel = Array.isArray(t.by_model) ? t.by_model.map(cleanModel).filter((m): m is PaneModel => m !== null) : []
+  const totals: PaneTotals = { spawns: isNum(t.spawns) ? t.spawns : rows.length, tokens: isNum(t.tokens) ? t.tokens : 0, usd: isNum(t.usd) ? t.usd : 0, base_usd: isNum(t.base_usd) ? t.base_usd : 0, saved_pct: isNum(t.saved_pct) ? t.saved_pct : 0, open_fail: isNum(t.open_fail) ? t.open_fail : 0, base_label: strOr(t.base_label, ''), by_model: byModel }
   return { live, rows, totals }
 }
 

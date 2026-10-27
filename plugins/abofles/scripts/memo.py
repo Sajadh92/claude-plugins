@@ -13,6 +13,8 @@
                   · 3 nothing to change (already resolved / already open) — no trace line is written
     memo.py note <text>          add a user note to Decisions (something settled in chat)
     memo.py now < text           replace the Now section from stdin (what /abofles:memo writes)
+    memo.py receipt < text       record the task's receipt (Receipt place = pane): the Stop hook reads it as if it were printed,
+                                 so the memo and the Abo Fles pane get it and the chat does not; exit 2 when stdin is no receipt
     memo.py path                 print the main memo path (`path mine`: this session's file)
     memo.py move <root>          move this session's memo (its file, its Needs-you items, its index line) to project <root>
                                  and make <root> the session's project — for a session that was started in the wrong folder
@@ -29,10 +31,11 @@ Scope precedence: `--scope` · `- Resume = …` in the override block · the sav
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import memo_path, session_memo_path, sess_read, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg, resume_scope, config_read, config_write, SCOPES, CONFIG_PATH, memo_move, load_state, save_state, state_lock, refresh_guide, guide_line, last_resolved_note, script_cmd, clip  # noqa: E402
+from abofles_hook import memo_path, session_memo_path, sess_read, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg, resume_scope, config_read, config_write, SCOPES, CONFIG_PATH, memo_move, load_state, save_state, state_lock, refresh_guide, guide_line, last_resolved_note, script_cmd, clip, has_receipt, looks_like_receipt  # noqa: E402
 
 NO_EVIDENCE = 'abofles: resolve needs evidence — add a note, e.g. --trace "re-checked: <evidence>" or "user answered: <answer>"'
 
@@ -171,6 +174,19 @@ def main():
             return
         memo_decision(cwd, "", "note", text)
         print("noted")
+    elif cmd == "receipt":
+        text = sys.stdin.read().strip()
+        if not (has_receipt(text) or looks_like_receipt(text)):
+            print("abofles: not a receipt — pass the receipt lines (the 🧾 header and its done/why/check/open/next) on stdin")
+            sys.exit(2)
+        if not sid:
+            print("abofles: no session state — name it with --session")
+            sys.exit(2)
+        with state_lock(sid):
+            stx = load_state(sid)
+            stx["receipt_saved"] = {"text": text, "ts": time.time()}
+            save_state(sid, stx)
+        print("abofles: receipt recorded — it shows in the Abo Fles pane and the memo when the turn ends; end the turn with one short sentence, do not print it")
     elif cmd == "now":
         text = sys.stdin.read()
         if not text.strip():

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { headParts, receiptOf } from './pane'
+import { fmtWhen, headParts, receiptOf } from './pane'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const NOW = 1_700_000_000 // epoch seconds the mocked clock stands at
@@ -30,7 +30,7 @@ const panePayload = (over: object = {}) => ({
   spawns: {
     live: [{ side: 'Work', model: 'sonnet', effort: 'high', description: 'build the card', ts: NOW - 125 }],
     rows: ROWS,
-    totals: { spawns: 3, tokens: 92000, usd: 0.41, base_usd: 0.9, saved_pct: 54, open_fail: 1 },
+    totals: { spawns: 3, tokens: 92000, usd: 0.41, base_usd: 0.9, saved_pct: 54, open_fail: 1, base_label: 'Opus 5.5', by_model: [{ model: 'haiku', label: 'Haiku 5.5', spawns: 1, usd: 0.01, pct: 2 }, { model: 'sonnet', label: 'Sonnet 5.5', spawns: 1, usd: 0.4, pct: 98 }, { model: 'opus', label: 'Opus 5.5', spawns: 1, usd: 0, pct: 0 }] },
   },
   overrides: {
     files: { project: '/proj/CLAUDE.md', user: '/home/.claude/CLAUDE.md' },
@@ -128,60 +128,82 @@ test('every card draws from the state file, on every surface', async ($, on) => 
   await harness($, on, { guide: guideOf([item({ p: '🔴', text: 'open FAIL', id: 'fail:a' }), item({ text: 'then escalate' })], { ctx: { tokens: 412000, mark: 500 }, task: { spawns: 3, usd: 0.41, budget: 5, left: 2 } }), pane: panePayload() })
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
-    // Guide: the top item with its emoji, the rest, the meter, the buttons
-    expect(await said(ui, /🔴 open FAIL/)).toBe(true)
-    expect(await said(ui, /🟡 then escalate/)).toBe(true)
-    // the guide's numbers as label/value rows, as the app's own panels
-    for (const re of [/^Context$/, /^412K \/ 500K$/, /^Task$/, /^3 spawns · \$0\.41$/, /^Budget$/, /^2 left$/]) expect(await said(ui, re)).toBe(true)
+    // Guide: the top item after a dot in its tone (no emoji), the rest dim, the numbers as label/value rows, the buttons
+    expect(await said(ui, /^open FAIL$/)).toBe(true)
+    expect(await said(ui, /^then escalate$/)).toBe(true)
+    expect(await said(ui, /🔴|🟡/)).toBe(false)
+    for (const re of [/^Context$/, /^412K \/ 500K$/, /^This task$/, /^3 spawns · \$0\.41$/, /^Agent budget$/, /^2 of 5 left$/]) expect(await said(ui, re)).toBe(true)
+    // the meters and rules: SVG on the desktop (exact width, never wrapping), a row of ━ / ─ in the terminal (exact cells)
+    if (surface === 'desktop') {
+      const svgs = await ui.findAll({ type: 'Svg' })
+      expect(svgs.some((x: any) => x.props.alt === 'Context 82% of the next mark' && x.props.height === 4)).toBe(true)
+      expect(svgs.some((x: any) => /^Spend by model: Haiku 5\.5 2%, Sonnet 5\.5 98%, Opus 5\.5 0%$/.test(x.props.alt))).toBe(true)
+      expect(svgs.some((x: any) => x.props.alt === 'divider' && x.props.height === 1)).toBe(true)
+      expect(await said(ui, /^[━─]+$/)).toBe(false)
+    } else {
+      expect(await said(ui, /^━+$/)).toBe(true)
+      expect(await said(ui, /^─+$/)).toBe(true)
+    }
     for (const key of ['use', 'copy', 'hide']) expect(await has(ui, key)).toBe(true)
-    // Resume: head, the label rows, the numbered needs
-    for (const re of [/^Session$/, /^sid-pane$/, /^Memo$/, /^2026-10-20 09:00$/]) expect(await said(ui, re)).toBe(true) // the head as rows
-    expect(await said(ui, /now written/)).toBe(false) // the noisy part of the head is left out
+    expect(await propOf(ui, 'hide', 'plain')).toBe(true) // Hide is a link at the right, not a button among the actions
+    // Resume: Now, Next, Needs you (numbers in their own column), Left, Last receipts, then the facts of the head
     expect(await said(ui, /wiring the pane/)).toBe(true)
     expect(await said(ui, /^pick the cap$/)).toBe(true)
-    expect(await said(ui, /^1\.$/)).toBe(true) // the number is a Text of its own beside the item
+    expect(await said(ui, /^1$/)).toBe(true)
     expect(await said(ui, /^name the key$/)).toBe(true)
-    expect(await said(ui, /^3\.$/)).toBe(true)
+    expect(await said(ui, /^3$/)).toBe(true)
     expect(await said(ui, /wrote cards/)).toBe(true)
-    // Spawns: live with its start time, history grouped by task, newest first, and the totals; each row is its ask, then a dim detail line
-    expect(await said(ui, /^● Work · build the card$/)).toBe(true)
+    for (const re of [/^Session$/, /^sid-pane$/, /^Memo saved$/, /^Oct 20, 09:00$/]) expect(await said(ui, re)).toBe(true)
+    expect(await said(ui, /now written/)).toBe(false) // the noisy part of the head is left out
+    // Spawns: the saving first, the split by model, then Running and History (chip, ask, cost, dim detail), newest first
+    for (const re of [/^54% saved$/, /^\$0\.41 of \$0\.90 on Opus 5\.5$/, /^Haiku 5\.5$/, /^Sonnet 5\.5$/, /^98%$/, /^Tokens$/, /^92K$/, /^Open FAIL$/]) expect(await said(ui, re)).toBe(true)
+    expect(await said(ui, /^■$/)).toBe(true) // the model swatches
+    expect(await said(ui, /^3 spawns$/)).toBe(true) // the card's summary
+    expect(await said(ui, /^● LIVE$/)).toBe(true)
+    expect(await said(ui, /^Work · build the card$/)).toBe(true)
     expect(await said(ui, new RegExp(`^${hhmm(NOW - 125)}$`))).toBe(true) // the start time, not an age that goes stale
     expect(await said(ui, /^sonnet·high$/)).toBe(true)
     expect(await said(ui, /Fix login/)).toBe(false) // a spawn's prompt line is no heading
     expect(await said(ui, /^Read · read the docs$/)).toBe(true)
-    expect(await said(ui, /^done · high · haiku·low · 12K · \$0\.01 · saved 90%$/)).toBe(true)
+    expect(await said(ui, /^haiku·low · 12K$/)).toBe(true)
+    expect(await said(ui, /^\$0\.01$/)).toBe(true)
     expect(await said(ui, /^Work · patch it$/)).toBe(true)
-    expect(await said(ui, /^PASS$/)).toBe(true) // the verdict held at the right of its row
-    expect(await said(ui, /^done · medium · sonnet·medium · 80K · \$0\.40 · saved 50%$/)).toBe(true)
+    expect(await said(ui, /^PASS$/)).toBe(true)
+    expect(await said(ui, /^sonnet·medium · 80K$/)).toBe(true)
     expect(await said(ui, /^Verify · check it$/)).toBe(true)
-    expect(await said(ui, /^done · low · opus·high · - · - · saved -$/)).toBe(true)
-    expect(await said(ui, /^1 live · 3 spawns · \$0\.41$/)).toBe(true) // the card's summary
-    for (const re of [/^Saved$/, /^54%$/, /^Open FAIL$/]) expect(await said(ui, re)).toBe(true)
-    const rows = (await ui.findAll({ type: 'Text', text: /^(Read|Work|Verify) · / })).map((r: any) => r.text)
+    expect(await said(ui, /^DONE$/)).toBe(true) // no verdict: the status, dim
+    expect(await said(ui, /^opus·high$/)).toBe(true)
+    expect(await said(ui, /^Updated \d\d:\d\d · refreshes when a turn ends$/)).toBe(true)
+    const rows = (await ui.findAll({ type: 'Text', text: /^(Read|Work|Verify) · (read|patch|check)/ })).map((r: any) => r.text)
     expect(rows[0]).toBe('Verify · check it') // newest first
     expect(rows[rows.length - 1]).toBe('Read · read the docs')
-    // Overrides: a short card on the main page (what a file sets, the other lines), the editor one press away
+    // Overrides: a short card on the main page (a table of what a file sets, the other lines), the editor one press away
     expect(await said(ui, /^Overrides$/)).toBe(true)
-    expect(await said(ui, /^Receipt$/)).toBe(true)
-    expect(await said(ui, /^short · this project$/)).toBe(true)
+    for (const re of [/^Receipt$/, /^short$/, /^this project$/, /^1 set$/]) expect(await said(ui, re)).toBe(true)
     expect(await said(ui, /^Parallel$/)).toBe(false) // a default is not listed
-    expect(await said(ui, /^Other lines$/)).toBe(true)
+    expect(await propOf(ui, 'edit-other', 'label')).toBe('1 other line · tiers, reviewers ›')
+    expect(await propOf(ui, 'edit-overrides', 'label')).toBe('Edit')
     expect(await has(ui, 'sel:Receipt')).toBe(false)
     for (const key of ['fold:guide', 'fold:resume', 'fold:spawns', 'fold:overrides', 'edit-overrides']) expect(await has(ui, key)).toBe(true)
-    // the editor page: Back, the scope, the fields (named by their label), the other file's lines, the buttons
+    // the editor page: ‹ Overrides, the scope buttons, settings rows (name and help on the left, the control on the right), the buttons
     await ui.press({ key: 'edit-overrides' })
     expect(await has(ui, 'fold:guide')).toBe(false) // the cards make room for the page
-    expect(await propOf(ui, 'sel:Receipt', 'label')).toBe('Receipt') // the label prop names the control
+    expect(await propOf(ui, 'back', 'label')).toBe('‹ Overrides')
+    expect(await propOf(ui, 'scope:project', 'variant')).toBe('primary')
+    expect(await propOf(ui, 'scope:user', 'variant')).toBe('secondary')
+    expect(await said(ui, /^CLAUDE\.md · the project file wins over yours$/)).toBe(true)
+    expect(await said(ui, /^Receipt$/)).toBe(true) // the name beside the control
+    expect(await propOf(ui, 'sel:Receipt', 'label')).toBeUndefined()
     expect(await valueOf(ui, 'sel:Receipt')).toBe('short')
     expect(await valueOf(ui, 'in:Parallel')).toBe('3')
-    expect(await said(ui, /^this project$/)).toBe(true) // Receipt's badge
-    expect(await said(ui, /^default$/)).toBe(false) // a default carries no badge
-    expect(await said(ui, /^The receipt form; savings N prints it only when N% was saved$/)).toBe(true) // the help line
+    expect(await said(ui, /^Receipt form; savings N = only past N% · this project$/)).toBe(true) // the help, and the file that sets it
+    expect(await said(ui, /^Background agents at once$/)).toBe(true) // a default: the help alone
     expect(await has(ui, 'raw')).toBe(false) // Other overrides: folded while this file has none of its lines
     expect(await said(ui, /^1 in all projects$/)).toBe(true) // its summary
     await ui.press({ key: 'fold:g:Other' })
     expect(await said(ui, /^Topic: Billing = T3 — in all projects; switch Save to, to edit it$/)).toBe(true)
-    for (const key of ['back', 'save', 'ask', 'scope', 'raw', 'fold:g:Agents', 'fold:g:Output', 'fold:g:Other']) expect(await has(ui, key)).toBe(true)
+    for (const key of ['back', 'save', 'ask', 'raw', 'fold:g:Agents', 'fold:g:Output', 'fold:g:Other']) expect(await has(ui, key)).toBe(true)
+    expect(await propOf(ui, 'ask', 'label')).toBe('Ask Claude')
     expect(await has(ui, 'reset')).toBe(false) // nothing to discard
     await ui.press({ key: 'fold:g:Other' }) // as it was, for the next surface
     await ui.press({ key: 'back' })
@@ -242,10 +264,11 @@ test('malformed parts of the pane payload are dropped, the rest is drawn', async
   const ui = await mountPane($, 'desktop')
   expect(await said(ui, /^ok$/)).toBe(true)
   expect(await said(ui, /^fine$/)).toBe(true)
-  expect(await said(ui, /^2\.$/)).toBe(true)
-  expect(await said(ui, /^done · \? · \? · - · - · saved -$/)).toBe(true)
+  expect(await said(ui, /^2$/)).toBe(true)
+  expect(await said(ui, /^DONE$/)).toBe(true) // a row with nothing but a status
+  expect(await said(ui, /^\?$/)).toBe(true) // no model, no tokens: the detail line is a bare ?
   await ui.press({ key: 'edit-overrides' })
-  expect(await propOf(ui, 'in:Receipt', 'label')).toBe('Receipt') // no kind: a text Input
+  expect(await has(ui, 'in:Receipt')).toBe(true) // no kind: a text Input
   await ui.unmount()
 })
 
@@ -385,7 +408,7 @@ test('the classic PostToolUse and SubagentStop refresh the pane, so live spawns 
   expect(await said(ui, /build the card/)).toBe(false)
   w.state = { guide: guideOf([item()]), pane: panePayload() }
   await $.classic.PostToolUse({ tool_name: 'Agent', tool_input: {}, tool_response: {}, tool_use_id: 'u1' } as never)
-  expect(await said(ui, /^● Work · build the card$/)).toBe(true)
+  expect(await said(ui, /^Work · build the card$/)).toBe(true)
   expect(await said(ui, new RegExp(`^${hhmm(NOW - 125)}$`))).toBe(true)
   w.state = { guide: guideOf([item()]), pane: panePayload({ spawns: { live: [], rows: ROWS, totals: { spawns: 3, tokens: 1, usd: 0, base_usd: 0, saved_pct: 0, open_fail: 0 } } }) }
   await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a1', agent_type: 'general', agent_transcript_path: '', last_assistant_message: '' } as never)
@@ -427,16 +450,15 @@ for (const surface of SURFACES) {
     await harness($, on, ovState())
     const ui = await mountEditor($, surface)
     await ui.press({ key: 'fold:g:Other' }) // folded while the project file has none of its lines
-    expect(await valueOf(ui, 'scope')).toBe('project')
-    const scope = (await ui.find({ key: 'scope' }))?.props.options as { value: string; label: string }[]
-    expect(scope.map(o => o.label)).toEqual(['This project', 'All projects'])
-    // every control is named by its label prop (no fixed-width Text beside it)
-    expect(await propOf(ui, 'scope', 'label')).toBe('Save to')
-    expect(await propOf(ui, 'sel:Receipt', 'label')).toBe('Receipt')
-    expect(await propOf(ui, 'in:Parallel', 'label')).toBe('Parallel')
-    expect(await propOf(ui, 'raw', 'label')).toBe('Lines') // the group says what they are; the example is the dim hint line
-    expect(await said(ui, /^Parallel$|^Receipt$|^Save to$/)).toBe(false)
-    expect(await said(ui, /^CLAUDE\.md$/)).toBe(true) // the target file under the scope
+    expect(await propOf(ui, 'scope:project', 'variant')).toBe('primary')
+    expect(await propOf(ui, 'scope:project', 'label')).toBe('This project')
+    expect(await propOf(ui, 'scope:user', 'label')).toBe('All projects')
+    // settings rows: the name is a Text beside the control, the control carries no label of its own
+    expect(await said(ui, /^Save to$/)).toBe(true)
+    for (const re of [/^Parallel$/, /^Receipt$/]) expect(await said(ui, re)).toBe(true)
+    expect(await propOf(ui, 'sel:Receipt', 'label')).toBeUndefined()
+    expect(await propOf(ui, 'in:Parallel', 'label')).toBeUndefined()
+    expect(await propOf(ui, 'raw', 'placeholder')).toBe('Topic: Billing = T3')
     expect(await said(ui, /unsaved/)).toBe(false)
     expect(await propOf(ui, 'save', 'variant')).toBe('secondary') // nothing to save
     expect(await has(ui, 'reset')).toBe(false) // nothing to discard
@@ -450,8 +472,9 @@ for (const surface of SURFACES) {
     expect(await said(ui, /^1 unsaved$/)).toBe(true)
     expect(await said(ui, /^1 edited$/)).toBe(true) // the group's summary
     expect(await propOf(ui, 'save', 'variant')).toBe('primary') // something to save
-    expect(await propOf(ui, 'reset', 'label')).toBe('Discard edits')
-    expect(await said(ui, /^edited$/)).toBe(true) // Receipt's badge
+    expect(await propOf(ui, 'reset', 'label')).toBe('Discard')
+    expect(await propOf(ui, 'save', 'label')).toBe('Save 1 change')
+    expect(await said(ui, /^ · edited$/)).toBe(true) // beside Receipt's name
     await ui.input({ key: 'in:Parallel', text: '5', kind: 'change' })
     expect(await valueOf(ui, 'in:Parallel')).toBe('5')
     expect(await said(ui, /^2 unsaved$/)).toBe(true)
@@ -478,7 +501,8 @@ for (const surface of SURFACES) {
     expect(w.toasts).toContain('Saved to CLAUDE.md')
     expect(await said(ui, /unsaved/)).toBe(false) // the draft is clear
     expect(await valueOf(ui, 'in:Parallel')).toBe('5') // the table is the one the script printed
-    expect((await ui.findAll({ type: 'Text', text: /^this project$/ })).length).toBe(2) // both keys now set in the project file
+    expect(await said(ui, /^Receipt form; savings N = only past N% · this project$/)).toBe(true) // both keys now set in the project file
+    expect(await said(ui, /^Background agents at once · this project$/)).toBe(true)
     expect(await said(ui, /Topic: Billing/)).toBe(false) // the printed table had no raw lines
     await ui.unmount()
   })
@@ -510,7 +534,7 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'save' })
     expect(w.toasts).toContain('abofles: CLAUDE.md changed while saving — reload the pane and save again')
     expect(await said(ui, /^1 unsaved$/)).toBe(true)
-    expect(await propOf(ui, 'save', 'label')).toBe('Save') // free to press again
+    expect(await propOf(ui, 'save', 'label')).toBe('Save 1 change') // free to press again
     await ui.unmount()
   })
 
@@ -544,11 +568,11 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'fold:g:Other' }) // folded while the project file has none of its lines
     expect(await valueOf(ui, 'raw')).toBe('')
     expect(await said(ui, /^Topic: Billing = T3 — in all projects; switch Save to, to edit it$/)).toBe(true)
-    await ui.select({ key: 'scope', value: 'user' })
-    expect(await valueOf(ui, 'scope')).toBe('user')
+    await ui.press({ key: 'scope:user' })
+    expect(await propOf(ui, 'scope:user', 'variant')).toBe('primary')
     expect(await valueOf(ui, 'raw')).toBe('Topic: Billing = T3')
     expect(await said(ui, /switch Save to/)).toBe(false)
-    expect(await said(ui, /^~\/\.claude\/CLAUDE\.md$/)).toBe(true)
+    expect(await said(ui, /^~\/\.claude\/CLAUDE\.md · the project file wins over yours$/)).toBe(true)
     await ui.input({ key: 'raw', text: 'Topic: Billing = T3\n- Reviewers: FIN = tester\n', kind: 'change' })
     expect(await said(ui, /^1 unsaved$/)).toBe(true)
     expect(await said(ui, /^edited$/)).toBe(true) // the Other overrides group's summary
@@ -560,9 +584,9 @@ for (const surface of SURFACES) {
     expect(w.runs[0]?.argv).toEqual(['bash', '/x/plugins/abofles/scripts/py', '/x/plugins/abofles/scripts/overrides.py', '--session', 'sid-pane', 'set', '--scope', 'user'])
     expect(JSON.parse(w.stdins[0] ?? '')).toEqual({ set: { Receipt: 'full' }, raw: ['Topic: Billing = T3', 'Reviewers: FIN = tester'] })
     expect(w.toasts).toContain('Saved to ~/.claude/CLAUDE.md')
-    expect(await valueOf(ui, 'scope')).toBe('user') // the target stays
+    expect(await propOf(ui, 'scope:user', 'variant')).toBe('primary') // the target stays
     expect(await valueOf(ui, 'raw')).toBe('Topic: Billing = T3\nReviewers: FIN = tester')
-    await ui.select({ key: 'scope', value: 'project' })
+    await ui.press({ key: 'scope:project' })
     await ui.unmount()
   })
 
@@ -572,7 +596,7 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'fold:g:Other' }) // folded while the project file has none of its lines
     await ui.select({ key: 'sel:Receipt', value: 'full' })
     await ui.input({ key: 'in:Parallel', text: '9', kind: 'change' })
-    await ui.select({ key: 'scope', value: 'user' })
+    await ui.press({ key: 'scope:user' })
     await ui.input({ key: 'raw', text: 'Topic: X = T1', kind: 'change' })
     expect(await said(ui, /^3 unsaved$/)).toBe(true)
     await ui.press({ key: 'reset' })
@@ -582,7 +606,7 @@ for (const surface of SURFACES) {
     expect(await valueOf(ui, 'in:Parallel')).toBe('3')
     expect(await valueOf(ui, 'raw')).toBe('Topic: Billing = T3')
     expect(w.runs).toEqual([])
-    await ui.select({ key: 'scope', value: 'project' })
+    await ui.press({ key: 'scope:project' })
     await ui.unmount()
   })
 
@@ -598,8 +622,8 @@ for (const surface of SURFACES) {
     expect(await valueOf(ui, 'sel:Agents')).toBe('@custom')
     expect(await has(ui, 'custom:Agents')).toBe(true)
     expect(await valueOf(ui, 'custom:Agents')).toBe('3') // starts with a sensible N
-    expect(await propOf(ui, 'custom:Agents', 'label')).toBe('Agents value')
     expect(await propOf(ui, 'custom:Agents', 'placeholder')).toBe('N agents per task') // its hint
+    expect(await said(ui, /^N agents per task$/)).toBe(true) // and the same hint beside it
     await ui.input({ key: 'custom:Agents', text: '7', kind: 'change' })
     expect(await said(ui, /^1 unsaved$/)).toBe(true)
     await ui.select({ key: 'sel:Receipt', value: '@custom' })
@@ -628,7 +652,7 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'fold:g:Other' }) // folded while the project file has none of its lines
     await ui.input({ key: 'raw', text: 'Reviewers: FIN = tester', kind: 'change' }) // typed for the project file
     expect(await said(ui, /^1 unsaved$/)).toBe(true)
-    await ui.select({ key: 'scope', value: 'user' })
+    await ui.press({ key: 'scope:user' })
     expect(await valueOf(ui, 'raw')).toBe('Topic: Billing = T3') // the user file's own lines, not the typed ones
     expect(await said(ui, /unsaved/)).toBe(false)
     await ui.select({ key: 'sel:Receipt', value: 'full' })
@@ -636,7 +660,7 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'save' })
     expect(w.runs[0]?.argv).toEqual(['bash', '/x/plugins/abofles/scripts/py', '/x/plugins/abofles/scripts/overrides.py', '--session', 'sid-pane', 'set', '--scope', 'user'])
     expect(JSON.parse(w.stdins[0] ?? '')).toEqual({ set: { Receipt: 'full' } }) // no raw lines
-    await ui.select({ key: 'scope', value: 'project' })
+    await ui.press({ key: 'scope:project' })
     await ui.unmount()
   })
 
@@ -677,7 +701,7 @@ for (const surface of SURFACES) {
   test(`${surface}: every card folds to its header and stays folded; the choice is kept in the store`, async ($, on) => {
     const w = await harness($, on, ovState())
     const ui = await mountPane($, surface)
-    expect(await said(ui, /^ ⌄$/)).toBe(true) // the open chevron beside the title
+    expect(await said(ui, /^ ▾$/)).toBe(true) // the open caret beside the title
     await ui.press({ key: 'fold:resume' })
     expect(await said(ui, /^ ›$/)).toBe(true) // the folded chevron
     expect(await said(ui, /^Resume$/)).toBe(true) // the header stays
@@ -708,7 +732,7 @@ for (const surface of SURFACES) {
     const rows = Array.from({ length: 8 }, (_, i) => ({ ...ROWS[1], ts: NOW - 1000 + i, description: `step ${i}`, task: 'Ship it' }))
     await harness($, on, { guide: guideOf([item({ p: '🟠', text: long, id: 'dec:1' }), item({ id: 'a' }), item({ id: 'b' }), item({ id: 'c' })]), pane: panePayload({ resume: { ...panePayload().resume, needs, needs_open: 11 }, spawns: { live: [], rows, totals: { spawns: 8, tokens: 1, usd: 0, base_usd: 0, saved_pct: 0, open_fail: 0 } } }) })
     const ui = await mountPane($, surface)
-    expect(await said(ui, new RegExp(`^🟠 ${long}$`))).toBe(true) // the top guide item in full
+    expect(await said(ui, new RegExp(`^${long}$`))).toBe(true) // the top guide item in full, after its dot
     expect(await said(ui, new RegExp(`^Your decision, next build ${long}$`))).toBe(true) // whole, ** and \` dropped
     expect(await said(ui, /^Needs you$/)).toBe(true)
     expect(await said(ui, /^11 need you$/)).toBe(true)
@@ -719,7 +743,8 @@ for (const surface of SURFACES) {
     expect(await said(ui, /^decision 13$/)).toBe(true)
     expect(await propOf(ui, 'more:needs', 'label')).toBe('Show less')
     // the guide's other items: two, then Show all
-    expect(await propOf(ui, 'more:guide', 'label')).toBe('Show all 3')
+    expect(await propOf(ui, 'more:guide', 'label')).toBe('Show all 4')
+    expect(await said(ui, /^4 open$/)).toBe(true)
     // the history: the newest five rows, then Show all
     expect(await said(ui, /^Work · step 7$/)).toBe(true)
     expect(await said(ui, /^Work · step 3$/)).toBe(true)
@@ -754,8 +779,10 @@ for (const surface of SURFACES) {
     const live = { live: [{ side: 'Work', model: 'sonnet', effort: 'high', description: 'build the card', ts: null }], rows: [], totals: { spawns: 0, tokens: 0, usd: 0, base_usd: 0, saved_pct: 0, open_fail: 0 } }
     const w = await harness($, on, { guide: guideOf([item({ p: '✅', text: 'all clear', id: 'ok:a' })], { ctx: { tokens: 480000, mark: 500 } }), pane: panePayload({ spawns: live }) })
     const ui = await mountPane($, surface)
-    expect(await said(ui, /^● Work · build the card$/)).toBe(true)
+    expect(await said(ui, /^Work · build the card$/)).toBe(true)
     expect(await said(ui, /^running$/)).toBe(true)
+    expect(await propOf(ui, 'memo', 'label')).toBe('Save memo')
+    expect(await said(ui, /^Near the next mark: save the memo, then \/compact\.$/)).toBe(true)
     expect(await propOf(ui, 'memo', 'variant')).toBe('primary')
     await ui.unmount()
     w.state = { guide: guideOf([item({ id: 'esc:open' })], { ctx: { tokens: 480000, mark: 500 } }), pane: panePayload() }
@@ -767,26 +794,33 @@ for (const surface of SURFACES) {
   })
 }
 
-test('a journal receipt line reads as one short row, its done / check / open as details', () => {
+test('a journal receipt line reads as a table row (time, spawns, $, saved), its done / check / open as details', () => {
   const line = '10-22 07:19 · 1 Spawn · 319K Tokens · $0.28 · Saved 46% ($0.24) vs Opus 5.5 · done: the pane · check: `79 pass` · open: none'
-  expect(receiptOf(line)).toEqual({ time: '10-22 07:19', head: '1 Spawn · $0.28 · Saved 46%', details: ['done: the pane', 'check: 79 pass', 'open: none'] })
-  expect(receiptOf('10-22 08:00 · done: only a note')).toEqual({ time: '10-22 08:00', head: 'done: only a note', details: [] })
-  expect(receiptOf('wrote cards')).toEqual({ time: null, head: 'wrote cards', details: [] })
+  expect(receiptOf(line)).toEqual({ time: '10-22 07:19', spawns: '1 spawn', usd: '$0.28', saved: '46%', text: '', details: ['done: the pane', 'check: 79 pass', 'open: none'] })
+  expect(receiptOf('10-22 08:00 · 11 Spawns · $7.96 · Saved 27% ($2.93) vs Opus 5.5').spawns).toBe('11 spawns')
+  expect(receiptOf('10-22 08:00 · done: only a note')).toEqual({ time: '10-22 08:00', spawns: null, usd: null, saved: null, text: 'done: only a note', details: [] })
+  expect(receiptOf('wrote cards')).toEqual({ time: null, spawns: null, usd: null, saved: null, text: 'wrote cards', details: [] })
   expect(headParts('📍 **Resume** · memo 2026-10-22 07:19 · away 2 days · session 8e23c250 · now written 2026-10-22 07:19 from receipt')).toEqual({ memo: '2026-10-22 07:19', away: '2 days', session: '8e23c250' })
+  expect(fmtWhen('10-22 07:19')).toBe('Oct 22 07:19')
+  expect(fmtWhen('2026-10-24 10:32', true)).toBe('Oct 24, 10:32')
+  expect(fmtWhen('soon')).toBe('soon')
 })
 
 for (const surface of SURFACES) {
-  test(`${surface}: Last receipts are short rows with the time at the right; Show details opens them; the fold header reads as its title`, async ($, on) => {
+  test(`${surface}: Last receipts are table rows under their own caret; a row's caret opens its details; the card header reads as its title`, async ($, on) => {
     const last = ['10-22 07:19 · 1 Spawn · 319K Tokens · $0.28 · Saved 46% ($0.24) vs Opus 5.5 · done: the pane · check: 79 pass']
     await harness($, on, { guide: guideOf([item()]), pane: panePayload({ resume: { ...panePayload().resume, last } }) })
     const ui = await mountPane($, surface)
-    expect(await said(ui, /^1 Spawn · \$0\.28 · Saved 46%$/)).toBe(true)
-    expect(await said(ui, /^10-22 07:19$/)).toBe(true)
+    for (const re of [/^Last receipts$/, /^Oct 22 07:19$/, /^1 spawn$/, /^\$0\.28$/, /^46%$/]) expect(await said(ui, re)).toBe(true)
     expect(await said(ui, /^done: the pane$/)).toBe(false)
-    await ui.press({ key: 'more:receipts' })
+    await ui.press({ key: 'rcpt:10-22 07:19' })
     expect(await said(ui, /^done: the pane$/)).toBe(true)
-    expect(await propOf(ui, 'more:receipts', 'label')).toBe('Hide details')
-    expect(await propOf(ui, 'fold:resume', 'label')).toBe('Resume ⌄') // the header button reads as the title and its chevron, no "Collapse …" text
+    expect(await said(ui, /^check: 79 pass$/)).toBe(true)
+    await ui.press({ key: 'fold:receipts' }) // the sub-list folds as a whole
+    expect(await said(ui, /^1 spawn$/)).toBe(false)
+    expect(await said(ui, /^Last receipts$/)).toBe(true)
+    await ui.press({ key: 'fold:receipts' })
+    expect(await propOf(ui, 'fold:resume', 'label')).toBe('Resume ▾') // the header button reads as the title and its caret
     await ui.unmount()
   })
 }

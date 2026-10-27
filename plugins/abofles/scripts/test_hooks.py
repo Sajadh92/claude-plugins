@@ -2309,7 +2309,7 @@ def main():
         check("pane: overrides.raw holds the lines the table cannot show (complex forms, unknown keys), files names both CLAUDE.md",
               [r["line"] for r in ov_["raw"]] == ["Unit Test / Work = haiku·medium", "Bogus = 1"] and all(r["source"] == "project" for r in ov_["raw"]) and ov_["files"] == {"project": str(Path(pd, "CLAUDE.md")), "user": os.environ["ABOFLES_USER_CLAUDE_MD"]})
         check("pane: cmd.overrides is the script_cmd argv prefix for overrides.py with the session", pn_["cmd"]["overrides"][:2] == ["bash", HG.posix(HG.SCRIPTS_DIR / "py")] and pn_["cmd"]["overrides"][2].endswith("/scripts/overrides.py") and pn_["cmd"]["overrides"][-2:] == ["--session", ps])
-        check("pane: spawns empty at start", pn_["spawns"] == {"live": [], "rows": [], "totals": {"spawns": 0, "tokens": 0, "usd": 0.0, "base_usd": 0.0, "saved_pct": 0, "open_fail": 0}})
+        check("pane: spawns empty at start", pn_["spawns"] == {"live": [], "rows": [], "totals": {"spawns": 0, "tokens": 0, "usd": 0.0, "base_usd": 0.0, "saved_pct": 0, "open_fail": 0, "base_label": "Opus 5.5", "by_model": []}})
         # post: a sync spawn, a background spawn; stop closes the background one
         okrep = "STATUS: done\nCONFIDENCE: high\nFACTS:\n- src/a.cs:1 — x\nGAPS: none"
         pa_ = lambda **kw: dict(agent("haiku", "low", cwd=pd, **kw), session_id=ps)
@@ -2317,7 +2317,7 @@ def main():
         pn_ = gstate(ps)["pane"]
         check("pane: a sync spawn lands in spawns.rows after post, with side/model/effort/status/confidence/topic/tier/task and no live row",
               len(pn_["spawns"]["rows"]) == 1 and pn_["spawns"]["live"] == [] and {k: pn_["spawns"]["rows"][0][k] for k in ("side", "model", "effort", "status", "topic", "tier", "task")} == {"side": "Read", "model": "haiku", "effort": "low", "status": "done", "topic": "Unit Test", "tier": 2, "task": "q"} and pn_["spawns"]["rows"][0]["confidence"] in ("high", "medium", "low")
-              and set(pn_["spawns"]["rows"][0]) == {"ts", "side", "model", "effort", "topic", "tier", "status", "confidence", "tokens", "usd", "base_usd", "description", "verdict", "task"} and pn_["spawns"]["totals"]["spawns"] == 1)
+              and set(pn_["spawns"]["rows"][0]) == {"ts", "side", "model", "effort", "topic", "tier", "status", "confidence", "tokens", "usd", "base_usd", "description", "verdict", "task", "resolved"} and pn_["spawns"]["totals"]["spawns"] == 1)
         bgd = dict(agent("sonnet", "medium", "abofles:abofles-worker", prompt="abofles: Unit Test / W · T2\nwrite the cap test\nLine cap: 30", cwd=pd), session_id=ps, tool_response={"status": "async_launched", "agentId": "bgagent1"})
         run("post", bgd, led)
         pn_ = gstate(ps)["pane"]
@@ -2327,6 +2327,23 @@ def main():
         pn_ = gstate(ps)["pane"]
         check("pane: SubagentStop refreshes the payload: live empties, the row is graded", pn_["spawns"]["live"] == [] and pn_["spawns"]["rows"][-1]["status"] == "done" and pn_["spawns"]["rows"][-1]["confidence"] == "medium")
         check("pane: totals count every row; with no transcripts tokens and usd are 0", pn_["spawns"]["totals"]["spawns"] == 2 and pn_["spawns"]["totals"]["tokens"] == 0)
+        # Receipt place = pane (the default with the mod): the Stop asks for the receipt recorded by memo.py receipt, and the recorded one closes the task
+        out_ = run("receipt", {"session_id": ps, "cwd": pd, "stop_hook_active": False, "last_assistant_message": "Done, tests pass."}, led)
+        rs_ = (out_ or {}).get("reason", "")
+        check("receipt place pane: the Stop asks for the receipt recorded by one command (memo.py receipt, a heredoc), not printed", "do NOT print" in rs_ and "memo.py" in rs_ and "receipt --session" in rs_ and "<<'EOF'" in rs_ and "🧾 **" in rs_ and "plain markdown" not in rs_)
+        mp_ = Path(__file__).resolve().parent / "memo.py"
+        hdr_ = re.search(r"^🧾 \*\*.*$", rs_, re.M).group(0)
+        menv_ = dict(os.environ, ABOFLES_STATE_DIR=state)
+        bad_ = subprocess.run([sys.executable, str(mp_), "receipt", "--session", ps], input="no receipt here", capture_output=True, text=True, env=menv_, cwd=pd)
+        rec_ = subprocess.run([sys.executable, str(mp_), "receipt", "--session", ps], input=hdr_ + "\n- `done` → recorded the cap test\n- `why` → pane\n- `check` → ok\n- `open` → none", capture_output=True, text=True, env=menv_, cwd=pd)
+        check("memo.py receipt: stdin without a receipt -> exit 2; a receipt -> exit 0, kept in the state for the Stop", bad_.returncode == 2 and rec_.returncode == 0 and "recorded" in rec_.stdout and (gstate(ps).get("receipt_saved") or {}).get("text", "").startswith("🧾"))
+        out_ = run("receipt", {"session_id": ps, "cwd": pd, "stop_hook_active": True, "last_assistant_message": "Done — the cap test is in."}, led)
+        st_ = gstate(ps)
+        check("receipt place pane: the recorded receipt closes the task like a printed one (no demand, count reset, used once)", not (out_ or {}).get("reason", "").count("no receipt") and st_.get("spawns_since_receipt", 0) == 0 and "receipt_saved" not in st_)
+        check("receipt place pane: the memo Journal (the pane's Last receipts) gets the recorded receipt", "recorded the cap test" in HG.session_memo_path(pd, ps).read_text())
+        mod(None); HG._PANE_ON.clear()
+        check("receipt place: without the mod the receipt is printed (output), whatever the line says", HG.place(pd, "receipt") == "output")
+        mod(True)
         # cap and clip, from a long ledger
         long_rows = [{"ts": 1000 + i, "side": "Read", "model": "haiku", "effort": "low", "topic": "T" * 700, "tier": 2, "status": "done", "confidence": "high", "tokens": 1000, "usd": 0.01, "base_usd": 0.04, "description": "d" * 700, "task": "t" * 700, "verdict": "PASS" if i % 2 else "FAIL"} for i in range(40)]
         stx = {}
@@ -2334,7 +2351,14 @@ def main():
         px = stx["pane"]["spawns"]
         check("pane: rows are the last 30 ledger rows, oldest first", len(px["rows"]) == 30 and px["rows"][0]["ts"] == 1010 and px["rows"][-1]["ts"] == 1039)
         check("pane: topic, description and task are clipped to PANE_TEXT characters", all(len(r[k]) <= HG.PANE_TEXT for r in px["rows"] for k in ("topic", "description", "task")))
-        check("pane: totals are the sums over all 40 rows (as bill.py), saved_pct from the real dollars", px["totals"] == {"spawns": 40, "tokens": 40000, "usd": 0.4, "base_usd": 1.6, "saved_pct": 75, "open_fail": 0})
+        check("pane: totals are the sums over all 40 rows (as bill.py), saved_pct from the real dollars", {k: v for k, v in px["totals"].items() if k not in ("by_model", "base_label")} == {"spawns": 40, "tokens": 40000, "usd": 0.4, "base_usd": 1.6, "saved_pct": 75, "open_fail": 0})
+        check("pane: totals carry the spend per model (label, spawns, usd, % of the spend) and the baseline's label", px["totals"]["by_model"] == [{"model": "haiku", "label": "Haiku 5.5", "spawns": 40, "usd": 0.4, "pct": 100}] and px["totals"]["base_label"] == "Opus 5.5")
+        mixed_ = [{"ts": 1, "model": "haiku", "usd": 0.1, "base_usd": 0.4, "tokens": 10, "topic": "A", "verdict": "FAIL", "resolved": True},
+                  {"ts": 2, "model": "sonnet", "usd": 0.3, "base_usd": 0.6, "tokens": 10, "topic": "B", "verdict": "FAIL"},
+                  {"ts": 3, "model": "opus", "usd": 0.6, "base_usd": 0.6, "tokens": 10, "topic": "C", "verdict": "PASS"}]
+        tm_ = HG.history_totals(mixed_)
+        check("pane: a FAIL resolved by hand is not an open FAIL; by_model is ordered haiku, sonnet, opus with % of the spend", tm_["open_fail"] == 1 and [(e["model"], e["spawns"], e["pct"]) for e in tm_["by_model"]] == [("haiku", 1, 10), ("sonnet", 1, 30), ("opus", 1, 60)])
+        check("pane: a row says whether its FAIL was resolved by hand", HG.pane_row(mixed_[0])["resolved"] is True and HG.pane_row(mixed_[1])["resolved"] is False)
         # Guide = off: the guide empties, the pane stays
         put_md(pd, "- Guide = off\n")
         run("prompt", {"session_id": ps, "cwd": pd}, led)
@@ -2382,7 +2406,7 @@ def main():
               len(hl) == 2 and "1K tok" in hl[0] and "$0.01" in hl[0] and "saved 75%" in hl[0] and "partial" in hl[1] and "low" in hl[1] and "saved 50%" in hl[1])
         check("bill --history: the totals line carries the same sums as the pane payload",
               any("Total: " in l and "· 3K tokens · $0.04 (same tokens on Opus 5.5 · High: $0.10) · saved 60% · 1 open FAIL" in l for l in bh)
-              and HG.history_totals([json.loads(l) for l in Path(led, "histsess.jsonl").read_text().splitlines()]) == {"spawns": 2, "tokens": 3000, "usd": 0.04, "base_usd": 0.1, "saved_pct": 60, "open_fail": 1})
+              and {k: v for k, v in HG.history_totals([json.loads(l) for l in Path(led, "histsess.jsonl").read_text().splitlines()]).items() if k not in ("by_model", "base_label")} == {"spawns": 2, "tokens": 3000, "usd": 0.04, "base_usd": 0.1, "saved_pct": 60, "open_fail": 1})
         check("commands: /abofles:spawns runs bill.py --history; /abofles:pane names the mod and falls back to memo.py show + bill.py --history",
               "bill.py\" --history" in (HOOK.parent.parent / "commands" / "spawns.md").read_text() and (lambda t: "abofles-guide" in t and "memo.py\" show" in t and "bill.py\" --history" in t)((HOOK.parent.parent / "commands" / "pane.md").read_text()))
         check("commands: /abofles:pane tells the user to type /abofles-pane and prints the text only when the mod is not enabled",
@@ -2514,8 +2538,8 @@ def main():
         form_marks = ["Topic / Side cap", "Topic / Side =", "Topic: Name", "Reviewers:", "Workflow:", "Review: <Tag>"]  # COMPLEX_FORMS order
         check("README: ... and every COMPLEX_FORMS form (one row each)", len(form_marks) == len(HG.COMPLEX_FORMS) and all(re.search(r"^\| `" + re.escape(m), sec_, re.M) for m in form_marks))
         check("README: ... with defaults from the code, the pane editor, /abofles:pane and /abofles:spawns", all(f"| `{k}` |" in sec_ and (v["default"] in sec_ if v["default"] else True) for k, v in HG.OVERRIDE_KEYS.items()) and "/abofles:pane" in sec_ and "/abofles:spawns" in sec_ and "pane" in sec_.split("| `Main session`")[0])
-        check("overrides.md: the three place forms are described and the form count matches the code", all(f"`{w} place = " in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() for w in ("Guide", "Resume", "Spawns"))
-              and f"Twenty-three forms" in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() and len(HG.OVERRIDE_KEYS) + len(HG.COMPLEX_FORMS) == 23)
+        check("overrides.md: the four place forms are described and the form count matches the code", all(f"`{w} place = " in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() for w in ("Guide", "Resume", "Spawns", "Receipt"))
+              and f"Twenty-four forms" in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() and len(HG.OVERRIDE_KEYS) + len(HG.COMPLEX_FORMS) == 24)
 
     print(f"\n{'ALL PASS' if not fails else f'{fails} FAILED'}")
     sys.exit(1 if fails else 0)

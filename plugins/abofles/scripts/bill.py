@@ -109,6 +109,8 @@ def main():
             key = r["verdict"] + (" +attention" if r.get("attention") else "")
             if r["verdict"] == "PASS" and open_fail.get(r.get("topic")):
                 key = f"PASS (after {open_fail.pop(r.get('topic'))} fix)"
+            elif r["verdict"] == "FAIL" and r.get("resolved"):  # closed by hand with evidence: not open
+                key = "FAIL (resolved)"
             elif r["verdict"] == "FAIL":
                 open_fail[r.get("topic")] = open_fail.get(r.get("topic"), 0) + 1
                 continue
