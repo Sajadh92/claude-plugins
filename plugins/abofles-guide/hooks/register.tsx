@@ -121,7 +121,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="row" flexWrap="wrap" gap={1}>
           <Text>{what ? `Abo Fles · ${what}` : 'Abo Fles'}</Text>
-          <Button key="pane" label="Pane" variant="secondary" onPress={() => openPane($)} />
+          <Button key="pane" label="Open pane" variant="secondary" onPress={() => openPane($)} />
         </Box>
       )
     }
@@ -138,12 +138,12 @@ export const register: Register = on => {
     if (g === null || hideKeyOf(g) === (await getHiddenKey($))) return quiet()
     const v = viewOf(g)
     if (v.done && !v.memo) return quiet()
-    const paneButton = p !== null ? <Button key="pane" label="Pane" variant="secondary" onPress={() => openPane($)} /> : null
+    const paneButton = p !== null ? <Button key="pane" label="Open pane" variant="secondary" onPress={() => openPane($)} /> : null
     return (
       <Box flexDirection="column">
         {v.done ? null : <Text>{g.line.replace(/`/g, '')}</Text>}
         {v.meter ? <Text dimColor>{v.meter}</Text> : null}
-        {guideButtons($, ui, g, v, false, paneButton)}
+        {guideButtons($, ui, g, v, paneButton)}
       </Box>
     )
   })

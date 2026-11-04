@@ -1,7 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
-import type { Guide, GuideItem, Pane, PaneLive, PaneModel, PaneOverrideKey, PaneOverrides, PanePlaces, PaneResume, PaneRow, PaneSpawns, PaneTotals } from '../types'
+import type { Guide, GuideItem, Pane, PaneDecision, PaneDecisions, PaneLive, PaneModel, PaneOverrideKey, PaneOverrides, PanePlaces, PaneResume, PaneRow, PaneSpawns, PaneTotals } from '../types'
+import { ICONS, emptyCard, headerBlock, paneWidth, svgOf, tileSvg } from './html'
+import type { Block, IconName, Tone } from './html'
 
 // What the band (register.tsx) and the pane (pane.tsx) share: the state atoms, the cleaning of the state file's
 // `guide` and `pane`, the refresh, and the guide's actions and buttons, so both places run the same code.
@@ -28,7 +30,12 @@ const paneDraft = atom({ plugin: 'abofles-guide', key: 'paneDraft' } as const, {
 // true while the editor's Save runs its command (up to 30 s): a second press is ignored.
 const paneSaving = atom({ plugin: 'abofles-guide', key: 'paneSaving' } as const, false)
 // Which page the pane shows: the cards, or the overrides editor ('overrides').
-const paneView = atom({ plugin: 'abofles-guide', key: 'paneView' } as const, 'main' as 'main' | 'overrides')
+const paneView = atom({ plugin: 'abofles-guide', key: 'paneView' } as const, 'main' as 'main' | 'overrides' | 'detail')
+// which card the detail page shows (see PluginState)
+const paneDetail = atom({ plugin: 'abofles-guide', key: 'paneDetail' } as const, null as string | null)
+// the desktop's page (the nav bar's tab), and when the person last moved (its cards slide in for a moment)
+const paneTab = atom({ plugin: 'abofles-guide', key: 'paneTab' } as const, 'home')
+const paneNavTs = atom({ plugin: 'abofles-guide', key: 'paneNavTs' } as const, 0)
 // Open (true) or folded (false) by id: a card ('guide'), an editor group ('g:Agents'), a long list ('more:needs'). Kept in $.store too.
 const paneFolds = atom({ plugin: 'abofles-guide', key: 'paneFolds' } as const, {} as Record<string, boolean>)
 
@@ -63,11 +70,47 @@ export function getPaneSaving($: EngineInterface) {
   return read($, paneSaving)
 }
 
-export async function getPaneView($: EngineInterface): Promise<'main' | 'overrides'> {
-  return (await read($, paneView)) === 'overrides' ? 'overrides' : 'main'
+export async function getPaneView($: EngineInterface): Promise<'main' | 'overrides' | 'detail'> {
+  const v = await read($, paneView)
+  return v === 'overrides' || v === 'detail' ? v : 'main'
 }
-export function setPaneView($: EngineInterface, view: 'main' | 'overrides') {
+export function setPaneView($: EngineInterface, view: 'main' | 'overrides' | 'detail') {
   return update($, paneView, () => view)
+}
+export async function getPaneDetail($: EngineInterface): Promise<string | null> {
+  const v = await read($, paneDetail)
+  return typeof v === 'string' ? v : null
+}
+export async function getPaneTab($: EngineInterface): Promise<string> {
+  const v = await read($, paneTab)
+  return typeof v === 'string' && v ? v : 'home'
+}
+export async function getPaneNavTs($: EngineInterface): Promise<number> {
+  const v = await read($, paneNavTs)
+  return typeof v === 'number' ? v : 0
+}
+// Moves the desktop pane to a page of its nav bar: the cards there slide in, and the page starts at its top.
+export async function goTab($: EngineInterface, tab: string) {
+  const at = await $.clock.now()
+  await update($, paneNavTs, () => at)
+  await update($, paneTab, () => tab)
+  await setPaneView($, 'main')
+  try {
+    await $.ui.scroll({ in: PANE_ID, to: 'start' })
+  } catch {
+    // a surface or a test without scrolling
+  }
+}
+
+// Opens the detail page of one card (`id`: 'guide', 'resume', 'spawns', 'decisions', 'receipt:<n>'); its Back returns to the cards.
+export async function openDetail($: EngineInterface, id: string) {
+  await update($, paneDetail, () => id)
+  await setPaneView($, 'detail')
+  try {
+    await $.ui.scroll({ in: PANE_ID, to: 'start' }) // the button sat low in the pane: the page starts at its top
+  } catch {
+    // a surface or a test without scrolling: the page still opens
+  }
 }
 
 export type Folds = Record<string, boolean>
@@ -130,28 +173,50 @@ export const plain = (text: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
-// A card in the look of the desktop app's own side panels (Context, Changes, Environment): a rounded dim border; a header row
-// whose left part, the title and its caret (▾ open, › folded), is one plain button that folds the card, and whose right part
-// is a short summary, dim or in `tone` (a theme key) with a dot before it; the body only while the card is open. `id` names the
-// fold (see isOpen). Folded, the card is that one row.
-export function card($: EngineInterface, ui: Ui, c: { id: string; title: string; summary?: string | null; tone?: string; folds: Folds; def?: boolean }, body: JSX.Element | (JSX.Element | null)[]) {
+// The disclosure caret, as the native panels draw it: a small solid triangle, right when folded and down when open. It is a
+// Button of its own (grey, `dimColor`): a desktop draws a Button's label alone, so a caret inside the title's Button could not be grey.
+export const CARET_OPEN = '▾'
+export const CARET_FOLDED = '▸'
+export const caretOf = (open: boolean): string => (open ? CARET_OPEN : CARET_FOLDED)
+
+// The gap in px between an icon and the Text after it: carried by the icon's own width, so the Box needs no column gap.
+// A Button after an icon needs none: the surface pads a Button by itself.
+const ICON_GAP = 4
+
+// A section in the look of the desktop app's own side panels (Context, Changes, Environment): flat, no box. The header row: a
+// 16 px line icon in the section's accent (desktop only), the title, and the small grey caret (▾ open, ▸ folded) — the title and the
+// caret are two plain Buttons that both fold the section (a desktop draws a Button's label alone, in one colour, so the caret is a
+// Button of its own to be grey) — and at the right a short summary, a Text: grey, or in `tone` (a theme key) where it carries
+// meaning. The body sits under the header only while the section is open. `id` names the fold (see isOpen). The pane draws a rule
+// between sections.
+export function card($: EngineInterface, ui: Ui, c: { id: string; title: string; summary?: string | null; tone?: string; folds: Folds; def?: boolean; icon?: IconName; neutral?: boolean; look?: Look }, body: JSX.Element | (JSX.Element | null)[]) {
   const { Box, Button, Text } = ui
   const open = isOpen(c.folds, c.id, c.def ?? true)
+  const toggle = () => setFold($, c.id, !open)
+  const mark = c.icon && c.look ? icon(ui, c.look, c.icon, c.neutral ? GREY : ACCENT[c.icon] ?? GREY, 16, `${c.title} icon`) : null
   return (
-    <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={2} paddingY={1} rowGap={1}>
-      <Box flexDirection="row" justifyContent="space-between" alignItems="center" columnGap={1}>
-        <Button key={`fold:${c.id}`} plain onPress={() => setFold($, c.id, !open)}>
-          <Text weight="medium">{c.title}</Text>
-          <Text dimColor>{open ? ' ▾' : ' ›'}</Text>
-        </Button>
-        {c.summary ? (
-          <Box flexDirection="row" columnGap={1} flexShrink={1}>
-            {c.tone ? <Text color={c.tone}>●</Text> : null}
-            {c.tone ? <Text color={c.tone}>{c.summary}</Text> : <Text dimColor>{c.summary}</Text>}
-          </Box>
-        ) : null}
+    <Box flexDirection="column">
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center" columnGap={1} paddingY="md">
+        <Box flexDirection="row" alignItems="center" columnGap={c.look?.svg === false ? 1 : 0} flexShrink={1}>
+          {mark}
+          <Button key={`fold:${c.id}`} label={c.title} plain onPress={toggle} />
+          <Button key={`fold-caret:${c.id}`} label={caretOf(open)} plain dimColor onPress={toggle} />
+        </Box>
+        {c.summary ? c.tone ? <Text color={c.tone} tabular>{c.summary}</Text> : <Text dimColor tabular>{c.summary}</Text> : null}
       </Box>
-      {open ? body : null}
+      {open ? <Box flexDirection="column" rowGap={1} paddingBottom="md">{body}</Box> : null}
+    </Box>
+  )
+}
+
+// Sections with a thin rule between each (not above the first, not below the last), as the app's panel divides its own.
+export function sections(ui: Ui, look: Look, items: (JSX.Element | null)[]) {
+  const { Box } = ui
+  const shown = items.filter((x): x is JSX.Element => x !== null)
+  if (hasSvg(ui, look)) return <Box flexDirection="column" rowGap="xl">{shown}</Box> // the HTML sections: space between groups, no rule
+  return (
+    <Box flexDirection="column">
+      {shown.flatMap((x, i) => (i === 0 ? [x] : [rule(ui, look, 'section divider'), x]))}
     </Box>
   )
 }
@@ -169,21 +234,26 @@ export function kv(ui: Ui, label: string, value: string, tone?: string) {
   )
 }
 
-// A small dim heading inside a card, with an optional count or note at the right (in `tone`, or dim).
-export function heading(ui: Ui, text: string, right?: string, tone?: string) {
+// A small heading inside a card (caption, medium, muted), with an optional small icon before it (`ic`, desktop only) and an
+// optional count or note at the right (in `tone`, or dim).
+export function heading(ui: Ui, text: string, right?: string, tone?: string, ic?: { look: Look; name: IconName; color?: string }) {
   const { Box, Text } = ui
+  const mark = ic ? icon(ui, ic.look, ic.name, ic.color ?? GREY, 12, `${text} icon`, ICON_GAP) : null
   return (
-    <Box flexDirection="row" justifyContent="space-between" columnGap={1}>
-      <Text size="caption" dimColor>
-        {text}
-      </Text>
+    <Box flexDirection="row" justifyContent="space-between" alignItems="center" columnGap={1}>
+      <Box flexDirection="row" alignItems="center" columnGap={mark ? 0 : 1} flexShrink={1}>
+        {mark}
+        <Text size="caption" weight="medium" dimColor>
+          {text}
+        </Text>
+      </Box>
       {right ? (
         tone ? (
-          <Text size="caption" color={tone}>
+          <Text size="caption" color={tone} tabular>
             {right}
           </Text>
         ) : (
-          <Text size="caption" dimColor>
+          <Text size="caption" dimColor tabular>
             {right}
           </Text>
         )
@@ -192,29 +262,175 @@ export function heading(ui: Ui, text: string, right?: string, tone?: string) {
   )
 }
 
-// The inner width of a card in cells: the pane body less the border (2) and the padding (4). Unknown width: 40.
-export const innerWidth = (cols?: number): number => Math.max(12, (typeof cols === 'number' ? cols : 46) - 6)
+// The inner width of a card in cells: the pane body less its padding (4). Unknown width: 40.
+export const innerWidth = (cols?: number): number => Math.max(12, (typeof cols === 'number' ? cols : 46) - 4)
 
-// The hex of a tone for SVG, which cannot name a theme key: the theme's red, amber and green as the app draws them.
+// The hex of a tone for SVG, which cannot name a theme key: the theme's red, amber and green as the app draws them (the dark values).
 const HEX: Record<string, string> = { error: '#e5675e', warning: '#e3a33b', success: '#63c174' }
 const hexOf = (color: string): string => HEX[color] ?? color
 
+// Each colour an SVG uses, by its dark value: [class, light value]. The dark values read >= 4.5:1 on #1a1a1a, the light ones >= 4.5:1
+// on #ffffff; a <style> in the SVG source gives light by default and the dark value under prefers-color-scheme: dark.
+const PAL: Record<string, [string, string]> = {
+  '#8f8f8f': ['grey', '#6b6b6b'],
+  '#e5675e': ['red', '#c53030'],
+  '#e3a33b': ['amber', '#9a6410'],
+  '#63c174': ['green', '#2a8043'],
+  '#d97757': ['coral', '#b5532f'],
+  '#4a8cf0': ['blue', '#2f6fd0'],
+  '#8b6cf0': ['violet', '#6a4bd0'],
+  '#17a398': ['teal', '#0f7f76'],
+  '#e0763a': ['orange', '#b5532f'],
+  '#4fae8e': ['mint', '#2b7a62'],
+  '#a78bfa': ['lilac', '#6d4fd0'],
+}
+const classOf = (hex: string, kind: 's' | 'f'): string => (PAL[hex] ? ` class="${kind}-${PAL[hex][0]}"` : '')
+const svgStyle = (): string => {
+  const rule = (dark: boolean) => Object.entries(PAL).map(([d, [n, l]]) => `.s-${n}{stroke:${dark ? d : l}}.f-${n}{fill:${dark ? d : l}}`).join('')
+  return `<style>${rule(false)}@media (prefers-color-scheme: dark){${rule(true)}}</style>`
+}
+// The light/dark pairs, for the record and the tests.
+export const COLOR_PAIRS: Record<string, { light: string; dark: string }> = Object.fromEntries(Object.entries(PAL).map(([d, [n, l]]) => [n, { light: l, dark: d }]))
+
+// A text colour for a colour that may be a hex (the terminal's Text takes theme keys, not hex): the nearest theme key.
+const TERM: Record<string, string> = { '#4a8cf0': 'suggestion', '#e0763a': 'claude', '#d97757': 'claude', '#4fae8e': 'success', '#63c174': 'success', '#e5675e': 'error', '#e3a33b': 'warning', '#a78bfa': 'inactive' }
+export const themeOf = (color: string): string | undefined => (color.startsWith('#') ? TERM[color] : color)
+
+// A short stable hash of a text (djb2, base 36): row ids keyed by it stay put when a row is prepended.
+export function shortHash(text: string): string {
+  let h = 5381
+  for (const ch of text) h = ((h * 33) ^ (ch.codePointAt(0) ?? 0)) >>> 0
+  return h.toString(36)
+}
+
+// Unique ids for a list: `base` per row, a repeated one gets `~2`, `~3`, ... so no two rows share a key.
+export function uniqueIds(bases: string[]): string[] {
+  const seen = new Map<string, number>()
+  return bases.map(b => {
+    const n = (seen.get(b) ?? 0) + 1
+    seen.set(b, n)
+    return n === 1 ? b : `${b}~${n}`
+  })
+}
+
 // How wide a card's inside is in cells, and whether the surface draws SVG (every one but the terminal), from the render event.
-export type Look = { width: number; svg: boolean }
+// `enter`: on a page just opened, the next picture's slide-in delay (ms), counted up as pictures are drawn; absent, drawn still.
+export type Look = { width: number; svg: boolean; enter?: { n: number } }
 export const lookOf = (e: RenderEvent): Look => ({ width: innerWidth((e.props as { bodyColumns?: number }).bodyColumns), svg: e.surface !== 'terminal' })
+
+// ---- icons: Lucide-style line icons (24 grid, 1.75 stroke, round caps), drawn as SVG where the surface can; none in the terminal.
+
+// the icon paths live in html.ts, which the HTML cards draw them from too
+export type { IconName }
+
+// Hex colours (SVG cannot name a theme key): the dark values, each with a light twin in PAL.
+export const GREY = '#8f8f8f' // the dark values; PAL gives each its light twin
+export const ACCENT: Record<string, string> = { compass: '#d97757', bookmark: '#4a8cf0', fork: '#8b6cf0', scale: '#17a398', sliders: GREY }
+
+// A line icon `size` px square in `color` (a hex), or null where the surface draws no SVG (the terminal: no icon).
+// `pad` px of empty room after the drawing (the gap to the label), added to the SVG's width.
+export function icon(ui: Ui, look: Look, name: IconName, color: string, size = 16, alt = `${name} icon`, pad = 0) {
+  if (!look.svg || !('Svg' in ui) || !ui.Svg) return null
+  const { Svg } = ui
+  const hex = hexOf(color)
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${size + pad}" height="${size}" viewBox="0 0 ${(24 * (size + pad)) / size} 24" preserveAspectRatio="xMinYMid meet" fill="none" stroke="${hex}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${svgStyle()}<g${classOf(hex, 's')}>${ICONS[name]}</g></svg>`
+  return <Svg source={source} alt={alt} width={size + pad} height={size} />
+}
+
+// A filled dot `size` px in `color`, with `alt` saying what it means (null where the surface draws no SVG). It is drawn centred in
+// a box `line` px tall — a line of body text — so beside a Text it sits on the first line's middle, however the text wraps.
+export function dotIcon(ui: Ui, look: Look, color: string, alt: string, size = 8, line = 20) {
+  if (!look.svg || !('Svg' in ui) || !ui.Svg) return null
+  const { Svg } = ui
+  const hex = hexOf(color)
+  const r = size / 2
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${line}" viewBox="0 0 ${size} ${line}">${svgStyle()}<circle cx="${r}" cy="${line / 2}" r="${r}"${classOf(hex, 'f')} fill="${hex}"/></svg>`
+  return <Svg source={source} alt={alt} width={size} height={line} />
+}
+
+// A muted empty-state line with a small icon before it (the icon only where the surface draws SVG).
+export function emptyLine(ui: Ui, look: Look, text: string, name: IconName = 'check', color: string = GREY) {
+  const { Box, Text } = ui
+  return (
+    <Box flexDirection="row" alignItems="center" columnGap={1}>
+      {icon(ui, look, name, color, 14, 'empty')}
+      <Text dimColor>{text}</Text>
+    </Box>
+  )
+}
+
+// Where a long text is cut: about `room` code points, never between a letter and its combining mark, back to the last space when
+// that is past the middle, trailing punctuation dropped, and "…" added.
+function cutAt(chars: string[], room: number): string {
+  let cut = Math.max(8, room)
+  while (cut < chars.length && /\p{M}/u.test(chars[cut])) cut++ // never between a letter and its combining mark
+  let head = chars.slice(0, cut).join('')
+  const sp = head.lastIndexOf(' ')
+  if (sp > head.length / 2) head = head.slice(0, sp)
+  return `${head.replace(/[\s,;:.\-–—،؛]+$/, '')}…`
+}
+
+// The room the "Read more" link takes at the end of the last row, in cells.
+const LINK_ROOM = 11
+
+type TextLook = { dim?: boolean; caption?: boolean; weight?: 'regular' | 'medium' | 'semibold' | 'bold' }
+
+// A text in one of the pane's styles (dim, caption, weight); `clip` cuts it at the edge with an ellipsis instead of wrapping.
+function styled(ui: Ui, t: string, o: TextLook, clip = false) {
+  const { Text } = ui
+  return (
+    <Text size={o.caption ? 'caption' : undefined} dimColor={o.dim ? true : undefined} weight={o.weight} wrap={clip ? 'truncate-end' : undefined}>
+      {t}
+    </Text>
+  )
+}
+
+// A description as the app's lists show one. It fits in `lines` rows of the card (`look.width` cells less `indent`, with 20% to
+// spare): shown whole, wrapping. Longer: the text fills the row and a small grey "Read more" link — a Button of its own, never the
+// text — sits at the row's right end; pressed, the full text with "Show less" there. One row is cut by the surface itself at the
+// row's real width (truncate-end, the whole text given), so the text uses every bit of room the pane has at any width; more rows
+// cannot be clipped by a surface, so their text is cut at a word with "…" to about that many rows. The text keeps its style (dim,
+// caption, weight) and stays plain text. The state is the fold `more:<id>`, kept with the other folds; `id` must be stable per text.
+export function longText($: EngineInterface, ui: Ui, look: Look, folds: Folds, id: string, text: string, o: TextLook & { indent?: number; lines?: number } = {}) {
+  const { Box, Button } = ui
+  const chars = Array.from(text)
+  const lines = Math.max(1, o.lines ?? 1)
+  const avail = Math.max(16, look.width - (o.indent ?? 0))
+  if (chars.length <= Math.ceil(avail * lines * 1.2)) return styled(ui, text, o) // at most ~20% over: a cut would save almost nothing
+  const key = `more:${id}`
+  const open = isOpen(folds, key, false)
+  // cells are the surface's code-font advance; a proportional face fits about a tenth more per row
+  const shown = open || lines === 1 ? text : cutAt(chars, Math.floor(avail * lines * 1.1) - LINK_ROOM)
+  return (
+    <Box flexDirection="row" alignItems="flex-end" columnGap={1}>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        {styled(ui, shown, o, !open && lines === 1)}
+      </Box>
+      <Box flexShrink={0}>
+        <Button key={key} label={open ? 'Show less' : 'Read more'} plain dimColor onPress={() => setFold($, key, !open)} />
+      </Box>
+    </Box>
+  )
+}
 
 // A drawing as wide as the card at a fixed height in px, where the surface draws SVG: the markup is 1200 wide and stretched
 // (preserveAspectRatio none), so it fills the card at any pane width without wrapping. Null in the terminal.
 function strip(ui: Ui, look: Look, height: number, alt: string, body: string) {
   if (!look.svg || !('Svg' in ui) || !ui.Svg) return null
   const { Svg } = ui
-  return <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="${height}" viewBox="0 0 1200 ${height}" preserveAspectRatio="none">${body}</svg>`} alt={alt} height={height} />
+  return <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="${height}" viewBox="0 0 1200 ${height}" preserveAspectRatio="none">${svgStyle()}${body}</svg>`} alt={alt} height={height} />
 }
 
 // A thin rule across the card: 1 px on the desktop, a row of ─ in the terminal (whose cells are exact).
-export function rule(ui: Ui, look: Look) {
+// `light` (between the rows of a list) is fainter than the rule between sections.
+export function rule(ui: Ui, look: Look, alt = 'divider', light = false) {
   const { Text } = ui
-  return strip(ui, look, 1, 'divider', '<rect width="1200" height="1" fill="#808080" fill-opacity="0.3"/>') ?? <Text dimColor>{'─'.repeat(look.width)}</Text>
+  return strip(ui, look, 1, alt, `<rect width="1200" height="1" fill="#808080" fill-opacity="${light ? '0.15' : '0.3'}"/>`) ?? <Text dimColor>{'─'.repeat(look.width)}</Text>
+}
+
+// The rows of a list with a light rule between each pair (not above the first, not below the last).
+export function ruled(ui: Ui, look: Look, rows: JSX.Element[]): JSX.Element[] {
+  return rows.flatMap((r, i) => (i === 0 ? [r] : [rule(ui, look, 'row divider', true), r]))
 }
 
 // A meter as the app draws one: coloured segments (percent of the width each) on a dim track — 4 px with 2 px gaps on the
@@ -228,7 +444,7 @@ export function bar(ui: Ui, look: Look, parts: { pct: number; color: string }[],
     .filter(p => clamp(p.pct) > 0)
     .map(p => {
       const w = Math.max(4, (1200 * clamp(p.pct)) / 100 - 4)
-      const r = `<rect x="${x.toFixed(1)}" width="${Math.min(w, 1200 - x).toFixed(1)}" height="4" rx="2" fill="${hexOf(p.color)}"/>`
+      const r = `<rect x="${x.toFixed(1)}" width="${Math.min(w, 1200 - x).toFixed(1)}" height="4" rx="2"${classOf(hexOf(p.color), 'f')} fill="${hexOf(p.color)}"/>`
       x += w + 4
       return x <= 1204 ? r : ''
     })
@@ -240,7 +456,7 @@ export function bar(ui: Ui, look: Look, parts: { pct: number; color: string }[],
     const n = Math.max(p.pct > 0 ? 1 : 0, Math.round((width * clamp(p.pct)) / 100))
     const cells = Math.min(n, width - used)
     used += cells
-    return cells > 0 ? <Text color={p.color}>{'━'.repeat(cells)}</Text> : null
+    return cells > 0 ? <Text color={themeOf(p.color)}>{'━'.repeat(cells)}</Text> : null
   })
   return (
     <Box flexDirection="row">
@@ -250,18 +466,88 @@ export function bar(ui: Ui, look: Look, parts: { pct: number; color: string }[],
   )
 }
 
-// The "Show all N" / "Show less" button of a list longer than `limit` (id `more:<id>`, folded by default), or null.
-export function moreButton($: EngineInterface, ui: Ui, folds: Folds, id: string, total: number, limit: number) {
+// The "Show all N" / "Show fewer" button of a list longer than `limit` (id `more:<id>`, folded by default), or null.
+export function moreButton($: EngineInterface, ui: Ui, folds: Folds, id: string, total: number, limit: number, look?: Look) {
   const { Button } = ui
   if (total <= limit) return null
   const all = isOpen(folds, `more:${id}`, false)
-  return <Button key={`more:${id}`} label={all ? 'Show less' : `Show all ${total}`} plain dimColor onPress={() => setFold($, `more:${id}`, !all)} />
+  const label = all ? 'Show fewer' : `Show all ${total}`
+  if (look && hasSvg(ui, look)) return <Button key={`more:${id}`} label={glyph(look, all ? GLYPH.less : GLYPH.more, label)} variant="secondary" onPress={() => setFold($, `more:${id}`, !all)} />
+  return <Button key={`more:${id}`} label={label} plain dimColor onPress={() => setFold($, `more:${id}`, !all)} />
 }
 
-// A long list: its first `limit` rows, then its moreButton.
-export function limited($: EngineInterface, ui: Ui, folds: Folds, id: string, rows: JSX.Element[], limit = 3): (JSX.Element | null)[] {
-  if (rows.length <= limit) return rows
-  return [...(isOpen(folds, `more:${id}`, false) ? rows : rows.slice(0, limit)), moreButton($, ui, folds, id, rows.length, limit)]
+// ---- the desktop's HTML sections (html.ts): a header strip, cards, and native buttons right under the card they act on
+
+// Whether this surface draws the HTML sections: it draws SVG (every one but the terminal).
+export const hasSvg = (ui: Ui, look: Look): boolean => look.svg && 'Svg' in ui && !!ui.Svg
+
+// The glyph before a button's label, one single-tone set for the whole pane: a glyph is text, so it takes the button's own colour
+// and state (primary, secondary, hover) as its label does. The terminal's buttons keep the label alone.
+export const GLYPH = { all: '✓', use: '↵', recheck: '↻', copy: '⧉', memo: '⤓', more: '↓', less: '↑', edit: '✎', show: '↺', other: '⋯', detail: '≡' } as const
+export const glyph = (look: Look, g: string, label: string): string => (look.svg ? `${g} ${label}` : label)
+
+// The pane's width in px, as its cards are laid out.
+export const paneW = (look: Look): number => paneWidth(look.width + 4)
+
+// An HTML block as a picture laid out at the pane's width and scaled to the slot keeping its ratio (a 4096 px width capped at
+// the slot, no height); `alt` is every text in it, one per line.
+export function pic(ui: Ui, look: Look, b: Block, alt: (string | null | undefined)[]) {
+  const { Svg } = ui as Ui & { Svg: NonNullable<Ui['Svg']> }
+  const enter = look.enter ? look.enter.n++ * 50 : -1 // one after another, 50 ms apart
+  return <Svg source={svgOf(b, paneW(look), enter)} alt={alt.filter((x): x is string => !!x).join('\n') || ' '} width={4096} />
+}
+
+// An empty or error state: a muted text in a card of its own, wrapped (never cut before its instruction).
+export const emptyPic = (ui: Ui, look: Look, text: string) => pic(ui, look, emptyCard(text, paneW(look)), [text])
+
+// The buttons of one group, in one wrapping row.
+export function buttonRow(ui: Ui, buttons: (JSX.Element | null)[]) {
+  const { Box } = ui
+  return buttons.some(Boolean) ? <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap="sm">{buttons}</Box> : null
+}
+
+// The desktop's pages, in the nav bar's order: each with the icon and tone its section's header strip draws, and its name.
+export const NAV: readonly { id: string; icon: IconName; tone: Tone; label: string }[] = [
+  { id: 'home', icon: 'house', tone: 'mint', label: 'Home' },
+  { id: 'guide', icon: 'compass', tone: 'coral', label: 'Guide' },
+  { id: 'resume', icon: 'bookmark', tone: 'blue', label: 'Resume' },
+  { id: 'decisions', icon: 'scale', tone: 'teal', label: 'Decisions' },
+  { id: 'spawns', icon: 'fork', tone: 'violet', label: 'Spawns' },
+  { id: 'overrides', icon: 'sliders', tone: 'grey', label: 'Overrides' },
+]
+
+// The nav bar at the top of every page, one tight row in the middle: one icon per page, the tile its section's header draws, 32 px, the page shown filled
+// in its tone. A Button holds text alone and a picture takes no press, so each icon has a plain Button laid over it, centred both
+// ways, its label one figure space (blank, never collapsed; wider labels are cut with "…"): with the button's own padding and
+// line it is about the 36 px tile, which is drawn 2 px low to sit on the button's centre — the press lands on the icon and the
+// desktop's ghost fill matches the tile under the pointer. The shown page's Button is the one not dimmed.
+const BLANK = '\u2007'
+export function navBar($: EngineInterface, ui: Ui, look: Look, tab: string, tabs: string[]) {
+  const { Box, Button, Svg } = ui as Ui & { Svg: NonNullable<Ui['Svg']> }
+  return (
+    <Box flexDirection="row" flexWrap="wrap" justifyContent="center" alignItems="center" gap="xs">
+      {NAV.filter(n => tabs.includes(n.id)).map(n => (
+        <Box key={`navitem:${n.id}`} position="relative" width={4} height={2} alignItems="center" justifyContent="center">
+          <Svg source={tileSvg(n.icon, n.tone, 36, n.id === tab, 2)} alt={n.id === tab ? `${n.label}, shown` : n.label} width={36} />
+          <Box position="absolute" top={0} left={0} right={0} bottom={0} alignItems="center" justifyContent="center">
+            <Button key={`nav:${n.id}`} label={BLANK} plain dimColor={n.id !== tab} onPress={() => goTab($, n.id)} />
+          </Box>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+// A section on the desktop: its header strip (the icon on a tile in `tone`, the title, the summary at the right in `summaryTone`
+// when it carries meaning) and its body, the cards and their buttons. Sections do not fold here: everything is in view.
+export function htmlSection(ui: Ui, look: Look, head: { icon: IconName; tone: Tone; title: string; summary?: string | null; summaryTone?: Tone | null }, body: (JSX.Element | null)[]) {
+  const { Box } = ui
+  return (
+    <Box flexDirection="column" rowGap="sm">
+      {pic(ui, look, headerBlock(head.icon, head.tone, head.title, head.summary, head.summaryTone), [head.title, head.summary])}
+      {body}
+    </Box>
+  )
 }
 
 export const isStr = (v: unknown): v is string => typeof v === 'string'
@@ -315,7 +601,10 @@ export function cleanGuide(raw: unknown): Guide | null {
       budget: isNum(raw.task.budget) ? raw.task.budget : null,
       left: isNum(raw.task.left) ? raw.task.left : null,
     }
+    if (isNum(raw.task.raised)) task.raised = raw.task.raised
   }
+  // Check all: a count and the text it hands over; anything else is dropped (older files have none).
+  const all = isObj(raw.all) && isNum(raw.all.n) && isStr(raw.all.fill) && raw.all.fill.trim() ? { n: raw.all.n, fill: raw.all.fill } : null
   // Claude's last resolve, kept by the hook for Undo: needs its text, a ready argv and a timestamp.
   let lastResolved: Guide['last_resolved'] = null
   const lr = raw.last_resolved
@@ -324,7 +613,7 @@ export function cleanGuide(raw: unknown): Guide | null {
     if (unresolve) lastResolved = { text: lr.text, unresolve, ts: lr.ts }
   }
   const items = Array.isArray(raw.items) ? raw.items.map(cleanItem).filter((i): i is GuideItem => i !== null) : []
-  return { line: raw.line, ts: isNum(raw.ts) ? raw.ts : 0, root: isStr(raw.root) ? raw.root : '', items, ctx, task, main: isStr(raw.main) ? raw.main : null, last_resolved: lastResolved }
+  return { line: raw.line, ts: isNum(raw.ts) ? raw.ts : 0, root: isStr(raw.root) ? raw.root : '', items, ctx, task, all, main: isStr(raw.main) ? raw.main : null, last_resolved: lastResolved }
 }
 
 // Where each thing shows; a missing or unknown place is today's view (guide in the band, resume and spawns in the output).
@@ -342,7 +631,25 @@ function cleanResume(raw: unknown): PaneResume | null {
   const needs = Array.isArray(raw.needs)
     ? raw.needs.filter(isObj).filter(n => isStr(n.text)).map(n => ({ n: numOrNull(n.n), text: n.text as string }))
     : []
-  return { head: strOr(raw.head, ''), now: strsOf(raw.now), left: strsOf(raw.left), next: strsOf(raw.next), needs, needs_open: isNum(raw.needs_open) ? raw.needs_open : needs.length, last: strsOf(raw.last) }
+  const needsFill = isStr(raw.needs_fill) && raw.needs_fill.trim() ? raw.needs_fill : null
+  return { head: strOr(raw.head, ''), now: strsOf(raw.now), left: strsOf(raw.left), next: strsOf(raw.next), needs, needs_open: isNum(raw.needs_open) ? raw.needs_open : needs.length, needs_fill: needsFill, last: strsOf(raw.last) }
+}
+
+// One decision (the owner's or the Judge's): the time, the question and the answer are text; a malformed entry is dropped.
+function cleanDecision(v: unknown): PaneDecision | null {
+  if (!isObj(v) || !isStr(v.ts) || !isStr(v.q) || !isStr(v.a)) return null
+  return { ts: v.ts, q: v.q, a: v.a, sid: strOr(v.sid, '') }
+}
+
+const DECISIONS_MAX = 50
+
+// The decisions with each group type-checked and held to 50 rows; not an object: none (the card is not drawn).
+function cleanDecisions(raw: unknown): PaneDecisions | null {
+  if (!isObj(raw)) return null
+  const group = (v: unknown): PaneDecision[] => (Array.isArray(v) ? v.map(cleanDecision).filter((d): d is PaneDecision => d !== null).slice(0, DECISIONS_MAX) : [])
+  const you = group(raw.you)
+  const judge = group(raw.judge)
+  return { you, judge, n_you: isNum(raw.n_you) ? raw.n_you : you.length, n_judge: isNum(raw.n_judge) ? raw.n_judge : judge.length }
 }
 
 function cleanLive(v: unknown): PaneLive | null {
@@ -414,6 +721,7 @@ export function cleanPane(raw: unknown): Pane | null {
       resume: cleanResume(raw.resume),
       spawns: cleanSpawns(raw.spawns),
       overrides: cleanOverrides(raw.overrides),
+      decisions: cleanDecisions(raw.decisions),
       cmd: { overrides: scriptArgv(cmd.overrides, ['overrides.py']) },
     }
   } catch {
@@ -607,10 +915,12 @@ export async function hideGuide($: EngineInterface, g: Guide) {
 }
 
 // Put text into the prompt box; keep a draft the person already typed. Hides the guide once it is in.
-export async function fillPrompt($: EngineInterface, g: Guide, text: string) {
+export async function fillPrompt($: EngineInterface, g: Guide | null, text: string) {
   const draft = (await $.prompt.read()).text.trim()
   const r = await $.prompt.fill({ text: draft ? `\n${text}` : text, mode: draft ? 'append' : 'replace' })
-  if (r.isFilled) await hideGuide($, g)
+  if (r.isFilled) {
+    if (g) await hideGuide($, g)
+  }
   else $.ui.toast('Prompt box is not open — use Copy')
 }
 
@@ -645,24 +955,23 @@ export function undoRow($: EngineInterface, ui: Ui, g: Guide, last: NonNullable<
     <Box flexDirection="row" flexWrap="wrap" gap={1}>
       <Text>{`✓ resolved: ${inPane ? plain(last.text) : Array.from(last.text).slice(0, 90).join('')}`}</Text>
       {!busy ? <Button key="undo" label="Undo" {...look} onPress={() => undoLast($, g, last)} /> : null}
-      <Button key="undo-hide" label="Hide" {...look} onPress={() => update($, dismissedTs, () => last.ts)} />
+      {/* the pane keeps the row until the guide changes: no Hide there (the band's row can be put away) */}
+      {inPane ? null : <Button key="undo-hide" label="Hide" onPress={() => update($, dismissedTs, () => last.ts)} />}
     </Box>
   )
 }
 
-// The guide's buttons: Use, Re-check, Memo, Copy, Hide. In the pane Use is the primary button and the rest secondary.
-export function guideButtons($: EngineInterface, ui: Ui, g: Guide, v: GuideView, inPane = false, extra: unknown = null) {
+// The band's guide buttons: Use, Re-check, Memo, Copy, Hide (the pane's Guide has its own row, pane.tsx guideActions).
+export function guideButtons($: EngineInterface, ui: Ui, g: Guide, v: GuideView, extra: unknown = null) {
   const { Box, Button } = ui
-  const main = inPane ? ({ variant: 'primary' } as const) : {}
-  const look = inPane ? ({ variant: 'secondary' } as const) : {}
-  const memoLook = v.done && v.memo ? ({ variant: 'primary' } as const) : look // nothing else open: the memo is the next step
+  const memoLook = v.done && v.memo ? ({ variant: 'primary' } as const) : {} // nothing else open: the memo is the next step
   return (
-    <Box flexDirection="row" flexWrap="wrap" gap={1} marginTop={inPane ? 0 : 1}>
-      {v.done ? null : <Button key="use" label="Use" {...main} onPress={() => fillPrompt($, g, v.prompt)} />}
-      {v.recheck ? <Button key="recheck" label="Re-check" {...look} onPress={() => fillPrompt($, g, v.recheck as string)} /> : null}
+    <Box flexDirection="row" flexWrap="wrap" gap={1} marginTop={1}>
+      {v.done ? null : <Button key="use" label="Use" onPress={() => fillPrompt($, g, v.prompt)} />}
+      {v.recheck ? <Button key="recheck" label="Re-check" onPress={() => fillPrompt($, g, v.recheck as string)} /> : null}
       {v.memo ? <Button key="memo" label="Memo" {...memoLook} onPress={() => fillPrompt($, g, '/abofles:memo')} /> : null}
-      {v.done ? null : <Button key="copy" label="Copy" {...look} onPress={press => copyPrompt($, v.prompt, press.surface)} />}
-      <Button key="hide" label="Hide" {...look} onPress={() => hideGuide($, g)} />
+      {v.done ? null : <Button key="copy" label="Copy" onPress={press => copyPrompt($, v.prompt, press.surface)} />}
+      <Button key="hide" label="Hide" onPress={() => hideGuide($, g)} />
       {extra as never}
     </Box>
   )

@@ -3,6 +3,7 @@
 
     guide.py          one line (the same the receipt and the resume block carry)
     guide.py --all    every item of the ladder, one per line
+    guide.py --check-all   one instruction that works through every open item (2+ items), numbered, each with its own Use text
     guide.py --scope session|project|all   owner decisions of this session only / of this project (default) / other projects counted too
 
 Ladder, highest first: open FAIL / ATTENTION · judged question unasked · owner decisions open ·
@@ -14,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import guide_items, refresh_guide, load_state, save_state, state_lock, newest_state_path, guide_on, session_arg, SCOPES  # noqa: E402
+from abofles_hook import guide_items, guide_entries, guide_check_all, refresh_guide, load_state, save_state, state_lock, newest_state_path, guide_on, session_arg, SCOPES  # noqa: E402
 
 
 def scope_arg(argv):
@@ -44,6 +45,10 @@ def main():
     root = st.get("project") or st.get("root") or os.getcwd()  # the work root when the session's edits moved the memo
     if not guide_on(root):
         print("abofles: guide is off (`- Guide = off` in the override block)")
+        return
+    if "--check-all" in sys.argv:
+        ca = guide_check_all(guide_entries(root, st, sid, scope=scope), sid)
+        print(ca["fill"] if ca else "abofles: fewer than 2 open items — nothing to check all")
         return
     if "--all" in sys.argv or scope:
         for e, t in guide_items(root, st, sid, scope=scope):

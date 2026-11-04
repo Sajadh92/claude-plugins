@@ -37,26 +37,57 @@ rewrites after every receipt. It needs `abofles` installed; without it the band 
 
 ## The Abo Fles pane
 
-A pane beside the transcript (the app docks it on the right) with one card per thing Abo Fles keeps for the session. The
-hooks write its data into the session's state file (`pane`) and this mod only draws it, in the look of the app's own side
-panels (Context, Changes, Environment): each card's header is its title with a caret (`▾` open, `›` folded; a click folds
-it, and the folds are remembered across sessions) and a short summary at the right, with a coloured dot when it needs you.
-Numbers are label/value rows with the values dim at the right; colour is a dot, a meter or a word (`PASS`, `FAIL`), never an
-emoji. Every text wraps (nothing is cut, markdown marks are dropped); a long list shows its first rows and `Show all N`.
+A pane beside the transcript (the app docks it on the right) with one section per thing Abo Fles keeps for the session. The
+hooks write its data into the session's state file (`pane`) and this mod only draws it. On the terminal it takes the look of the
+app's own side panels (Context, Changes, Environment): flat sections split by thin rules. Each header is its title, a small grey caret (`▾` open,
+`▸` folded; a click on the title or the caret folds it, and the folds are remembered across sessions) and a summary at the right,
+grey, or coloured where it means something (amber when it needs you, red for an open FAIL, green for all clear). Inside, one row
+system: a small captioned heading per group (with its icon and a count at the right), rows with a lead (a status dot, a number, a
+bullet, a caret), the text and a value held at the right, a muted second line for details, and a light rule between the rows of a
+list. Colour carries meaning only (a dot, a meter, a count that waits on you), never an emoji. Markdown marks are dropped; a
+description that fits its rows is shown whole; a longer one fills its row and a small grey `Read more` link of its own sits at the
+row's right end (`Show less` after the full text, remembered) — the text itself is never a button. A one-row text is cut by the
+surface at the pane's real width, so it uses all the room at any width; a two-row text is cut at a word with `…`. A long list shows its
+first rows and `Show all N` (`Show fewer` to fold it back).
 
-- **Guide**: the top item after a dot in its colour (red, amber, green), up to two more under it, then `Show all`; Context
-  with a meter (amber once the memo is due), This task and Agent budget as rows; `Use` (primary), `Re-check`, `Copy`, and
-  `Hide` as a link at the right; `Undo` after Claude's resolve. Nothing open: "Next from the memo" and what the memo
-  left, with `Save memo` near the next context mark. A hidden card shows `Show`. With `Guide place = pane` (the default)
-  the band above the prompt box is empty while the pane is up.
-- **Resume**: Now, Next, Needs you (numbered in amber, the first three, then `Show all`), Left; Last receipts as a table
-  under its own caret (time · spawns · $ · saved %; a row's caret opens its done / check / open); then Session, Memo saved
-  and Away. What `/abofles:resume` prints (`Resume place = pane`, the default).
+- **On the desktop** a nav bar of icons at the top shows one page at a time: Home, Guide, Resume, Decisions, Spawns, Overrides,
+  each the icon its section's header draws, on a 36 px tile in one centred row (the page shown filled in its colour, the icon white; a section placed in
+  the band or the chat has no page). A blank plain button lies over each icon, so the press lands on it and the desktop's ghost
+  fill shows under the pointer (a Button holds text alone, and a picture takes no press). The pane has no fixed header or footer to pin a bar to, so pages replace the long scroll. A page's cards
+  slide in for a moment when you move to it (a 0.26 s ease-out, one after another; none under reduced motion). **Home** sums up
+  every section: the next step with `Check all` / `Use`, the numbers at a glance (Context, Needs you, Running, Open FAIL, This
+  task, Saved), where the work stands (Now, Next), and the latest decision and receipt.
+- Every section is drawn in HTML and CSS (`hooks/html.ts`: XHTML in an SVG `<foreignObject>`, which the app
+  draws as an image, unsanitized, in its own text colour; laid out at the pane's width and scaled to the slot keeping its ratio):
+  a header strip (the section's icon on a tinted tile, the title, the summary as a pill where it carries meaning), then its
+  cards, with the section's buttons right under the card they act on. Sections do not fold there and have no caret: everything
+  is in view. Every action is a button whose label leads with one single-tone glyph (✓ Check all, ↵ Use, ↻ Re-check, ⧉ Copy,
+  ⤓ Save memo, ↓ Show all, ≡ Full details, ✎ Edit); one primary per page, the rest secondary; no Hide. Long texts
+  are clamped to their estimated lines (measured SF Pro widths); `≡ Full details` (under each receipt, and under Home, the Guide,
+  Resume, Spawns and Decisions) opens a page of its own, like the overrides editor, with a `‹ <page>` button back to the page it came from: the card's whole text as
+  markdown, drawn by the app as it draws a reply, so it wraps at the real width and nothing is cut. The terminal
+  keeps the native rows, carets and links described here.
+- **Guide**: "Next up" with the top item's priority pill and its text (up to four lines, then `Full details`), "Also open" with up
+  to two more items one line each (cut with `…` at the real width), then the numbers held between two edges — Context with a
+  meter (amber once the memo is due), This task, Agent budget, the suggested main model. Under the card the buttons: one primary
+  (`Check all (N)` when two or more items are open, else `Use`; `Save memo` when nothing else is open), the rest secondary
+  (`Re-check`, `Copy`, `Full details`, `Show all`); `Undo` after Claude's resolve. A fill hides the card until the list changes,
+  with `Show` to bring it back. Nothing open: "Next from the memo" and what the memo left.
+- **Resume**: Now and Next, Needs you (numbered in amber, the first three, then `Show all`), Left, with `Full details` on the
+  last card's button row; Last receipts: on the desktop a card each (the time and cost, what was done, the spawns and the saving,
+  then the check / open / next rows) with its own `Full details`; on the terminal one row each with a grey caret that opens its
+  done / check / open; then Session, Memo saved and Away. Two or more open Needs-you items add `Check all (N)`, which fills the prompt box
+  the same way. What `/abofles:resume` prints (`Resume place = pane`, the default).
+- **Decisions**: two groups, `By you` and `By Judge`, newest first; each decision its time as a small muted headline, the question,
+  and the answer under it after an arrow in semibold (a note is its text alone; the Judge's `judge:` lead is dropped), a light rule
+  between decisions; five, then `Show all`; an empty group says so. Drawn after Resume whenever the hooks wrote decisions, with no
+  `places` key of its own; older hooks write none and the card is absent.
 - **Spawns**: the saving first (`32% saved`, `$14.36 of $21.26 on Opus 5.5`), a meter split by model and a table (■ Haiku
   · Sonnet · Opus: spawns, $, share of the spend), Tokens, and Open FAIL in red when a FAIL is still open (one resolved by
-  hand with evidence is not); Running (`● LIVE`, the ask, its start time, the model); History newest first, five rows then
-  `Show all`: the verdict (`PASS` / `FAIL`, or the status) in a column of its own, the ask with its cost at the right, and a
-  dim line (`sonnet·high · 1.9M`, `resolved` for a FAIL closed by hand). What `/abofles:spawns` prints
+  hand with evidence is not). Running and History (newest first, five rows, then `Show all`) are activity rows: the status dot
+  (green done/pass, red fail, amber partial/blocked, blue running), the side in semibold and the ask (two rows, then Read more), the
+  cost at the right, and a muted line under them (`14:24 · Sonnet 5.5 · Medium · 810K tokens · PASS`; the status word only when it
+  means something). History is grouped by day under a small `Today` / `Yesterday` / `Nov 3` caption. What `/abofles:spawns` prints
   (`Spawns place = pane`, the default).
 - **Overrides**: a table of the values a file sets (key, value, `this project` / `all projects`), a link to the other
   lines, and `Edit`, which turns the pane into the editor page below. Always drawn.
@@ -67,7 +98,7 @@ view; the cards that are not placed in the pane are not drawn.
 Opening: the pane opens by itself once per session when the state has something placed in it, unless you closed it by
 hand (that is remembered across sessions, as is being open). Unasked, the app places it from 144 terminal columns, and
 from 110 once you have opened it yourself; on a narrower window it waits, and the band shows one row, `Abo Fles · <top
-item>`, with a `Pane` button that opens it at any width. `/abofles-pane` (the command this mod registers) opens the pane, or closes
+item>`, with an `Open pane` button that opens it at any width. `/abofles-pane` (the command this mod registers) opens the pane, or closes
 it when it is up. `/abofles:pane` is the abofles plugin's entry that points to it (the mod answers it too when the app routes it here);
 without this mod it prints the resume block and the spawn history as text.
 
@@ -84,7 +115,7 @@ draft is kept). It edits the simple keys of the `## abofles overrides` block (th
   the block) and `All projects` (`~/.claude/CLAUDE.md`); the file is named under them. The project file wins over the user
   file when both set a key.
 - The keys in folding groups: **Session** (Main session, Session cap, Context marks, Break, Pace), **Agents** (Agents,
-  Parallel, Agent budgets, Review gate, Questions), **Output** (Receipt, Guide, Resume, Language), **Where it shows**
+  Parallel, Agent budgets, Budget raise, Review gate, Git guard, Questions), **Output** (Receipt, Guide, Resume, Language), **Where it shows**
   (Guide place, Resume place, Spawns place, Receipt place); a key the table adds later goes to **More**. Each group's summary says
   `default`, how many keys a file sets, or how many are edited.
 - Each key is a settings row: its name (`· edited` beside it while unsaved) and a one-line help (plus the file that sets

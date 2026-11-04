@@ -9218,12 +9218,12 @@
    "reviewers": {
     "3": [
      "qa",
-     "finance"
+     "data"
     ],
     "4": [
      "qa",
      "tester",
-     "finance"
+     "data"
     ]
    },
    "n": 524
@@ -14682,6 +14682,92 @@
    },
    "n": 865
   },
+  "Merge Conflict Resolution": {
+   "group": "OPS",
+   "area": "Release Management",
+   "tier": 3,
+   "signals": "merge conflict, resolve conflict, resolve merge conflict, conflict markers, <<<<<<<, rebase conflict, cherry-pick conflict, git mergetool, both sides, merge base, ours theirs",
+   "reviewers": {
+    "3": [
+     "ops",
+     "tester"
+    ],
+    "4": [
+     "ops",
+     "security",
+     "tester"
+    ]
+   },
+   "n": 866
+  },
+  "History Rewrite & Force Push": {
+   "group": "OPS",
+   "area": "Release Management",
+   "tier": 4,
+   "signals": "force push, force-with-lease, rewrite history, git reset hard, filter-repo, filter-branch, BFG, amend pushed commit, squash pushed, remove secret from history, git reflog",
+   "reviewers": {
+    "3": [
+     "ops"
+    ],
+    "4": [
+     "ops",
+     "security",
+     "tester"
+    ]
+   },
+   "n": 867
+  },
+  "Multi-Session & Multi-Agent Git Coordination (worktrees, branch claims)": {
+   "group": "OPS",
+   "area": "Release Management",
+   "tier": 3,
+   "signals": "git worktree, worktrees, parallel sessions, multi agent git, branch per session, branch claim, two sessions same repo, concurrent branches, git agent",
+   "reviewers": {
+    "3": [
+     "ops"
+    ],
+    "4": [
+     "ops",
+     "security",
+     "tester"
+    ]
+   },
+   "n": 868
+  },
+  "Pull Requests & Code Review Flow (gh)": {
+   "group": "OPS",
+   "area": "Release Management",
+   "tier": 2,
+   "signals": "pull request, open PR, draft PR, gh pr, gh pr create, PR description, PR checks, merge PR, squash merge, PR template",
+   "reviewers": {
+    "3": [
+     "ops"
+    ],
+    "4": [
+     "ops",
+     "security",
+     "tester"
+    ]
+   },
+   "n": 869
+  },
+  "Tags, Releases & Changelogs": {
+   "group": "OPS",
+   "area": "Release Management",
+   "tier": 2,
+   "signals": "git tag, annotated tag, gh release, release notes, release tag, changelog entry, tag a release, push tags, release draft",
+   "reviewers": {
+    "3": [
+     "ops"
+    ],
+    "4": [
+     "ops",
+     "security",
+     "tester"
+    ]
+   },
+   "n": 870
+  },
   "Git Operations & Repository Hygiene": {
    "group": "OPS",
    "area": "Release Management",
@@ -14697,7 +14783,7 @@
      "tester"
     ]
    },
-   "n": 866
+   "n": 871
   },
   "Pre-commit Hooks & Local Quality Gates": {
    "group": "OPS",
@@ -14714,7 +14800,7 @@
      "tester"
     ]
    },
-   "n": 867
+   "n": 872
   },
   "Dependency Updates Automation (Dependabot, Renovate)": {
    "group": "OPS",
@@ -14731,7 +14817,7 @@
      "tester"
     ]
    },
-   "n": 868
+   "n": 873
   },
   "Packages & Libs Updates": {
    "group": "OPS",
@@ -14751,7 +14837,7 @@
    "ov": {
     "Analyse": "sonnet·high"
    },
-   "n": 869
+   "n": 874
   },
   "Build Systems & Compilation Pipelines": {
    "group": "OPS",
@@ -14768,7 +14854,7 @@
      "tester"
     ]
    },
-   "n": 870
+   "n": 875
   },
   "Software Supply Chain in CI (SBOM, signing, provenance)": {
    "group": "OPS",
@@ -14786,7 +14872,7 @@
      "tester"
     ]
    },
-   "n": 871
+   "n": 876
   },
   "Logging Design, Levels & What to Log": {
    "group": "OBS",
@@ -14802,7 +14888,7 @@
      "security"
     ]
    },
-   "n": 872
+   "n": 877
   },
   "Structured Logging & Log Schemas": {
    "group": "OBS",
@@ -14818,7 +14904,7 @@
      "security"
     ]
    },
-   "n": 873
+   "n": 878
   },
   "Correlation IDs & Request Tracing in Logs": {
    "group": "OBS",
@@ -14834,7 +14920,7 @@
      "security"
     ]
    },
-   "n": 874
+   "n": 879
   },
   "Sensitive Data in Logs & Log Redaction": {
    "group": "OBS",
@@ -14852,7 +14938,7 @@
      "compliance"
     ]
    },
-   "n": 875
+   "n": 880
   },
   "Log Aggregation (ELK, Loki, Datadog, Splunk, CloudWatch)": {
    "group": "OBS",
@@ -14868,7 +14954,7 @@
      "security"
     ]
    },
-   "n": 876
+   "n": 881
   },
   "Log Queries & Search (KQL, LogQL, Lucene)": {
    "group": "OBS",
@@ -14884,7 +14970,7 @@
      "security"
     ]
    },
-   "n": 877
+   "n": 882
   },
   "Log Retention, Volume & Cost": {
    "group": "OBS",
@@ -14900,7 +14986,7 @@
      "security"
     ]
    },
-   "n": 878
+   "n": 883
   },
   "Audit Logs & Security Event Logging (ops)": {
    "group": "OBS",
@@ -14918,7 +15004,7 @@
      "compliance"
     ]
    },
-   "n": 879
+   "n": 884
   },
   "Application Logging Frameworks & Configuration": {
    "group": "OBS",
@@ -14934,7 +15020,7 @@
      "security"
     ]
    },
-   "n": 880
+   "n": 885
   },
   "Log Shipping, Agents & Sidecars": {
    "group": "OBS",
@@ -14950,7 +15036,7 @@
      "security"
     ]
    },
-   "n": 881
+   "n": 886
   },
   "Log-based Alerts & Anomaly Detection": {
    "group": "OBS",
@@ -14966,7 +15052,7 @@
      "security"
     ]
    },
-   "n": 882
+   "n": 887
   },
   "Debug Logging in Production & Dynamic Log Levels": {
    "group": "OBS",
@@ -14982,7 +15068,7 @@
      "security"
     ]
    },
-   "n": 883
+   "n": 888
   },
   "Monitoring, Alerts & Health Checks": {
    "group": "OBS",
@@ -14998,7 +15084,7 @@
      "security"
     ]
    },
-   "n": 884
+   "n": 889
   },
   "Metrics Design (counters, gauges, histograms, cardinality)": {
    "group": "OBS",
@@ -15014,7 +15100,7 @@
      "security"
     ]
    },
-   "n": 885
+   "n": 890
   },
   "Prometheus, Grafana & Alertmanager": {
    "group": "OBS",
@@ -15030,7 +15116,7 @@
      "security"
     ]
    },
-   "n": 886
+   "n": 891
   },
   "Operational Dashboards & Panels": {
    "group": "OBS",
@@ -15046,7 +15132,7 @@
      "security"
     ]
    },
-   "n": 887
+   "n": 892
   },
   "Business & Product Metrics Dashboards (ops side)": {
    "group": "OBS",
@@ -15062,7 +15148,7 @@
      "security"
     ]
    },
-   "n": 888
+   "n": 893
   },
   "Alerting Rules, Thresholds & Noise Reduction": {
    "group": "OBS",
@@ -15078,7 +15164,7 @@
      "security"
     ]
    },
-   "n": 889
+   "n": 894
   },
   "SLIs, SLOs & Error Budgets": {
    "group": "OBS",
@@ -15094,7 +15180,7 @@
      "security"
     ]
    },
-   "n": 890
+   "n": 895
   },
   "APM & Application Performance Monitoring (Datadog, New Relic, App Insights, Elastic APM)": {
    "group": "OBS",
@@ -15110,7 +15196,7 @@
      "security"
     ]
    },
-   "n": 891
+   "n": 896
   },
   "Uptime Monitoring & Status Pages": {
    "group": "OBS",
@@ -15126,7 +15212,7 @@
      "security"
     ]
    },
-   "n": 892
+   "n": 897
   },
   "Synthetic Monitoring & Browser Checks": {
    "group": "OBS",
@@ -15142,7 +15228,7 @@
      "security"
     ]
    },
-   "n": 893
+   "n": 898
   },
   "Infrastructure Metrics (hosts, containers, DB, queues)": {
    "group": "OBS",
@@ -15158,7 +15244,7 @@
      "security"
     ]
    },
-   "n": 894
+   "n": 899
   },
   "Custom Instrumentation & Metrics SDKs": {
    "group": "OBS",
@@ -15174,7 +15260,7 @@
      "security"
     ]
    },
-   "n": 895
+   "n": 900
   },
   "Distributed Tracing (OpenTelemetry, Jaeger, Tempo, Zipkin)": {
    "group": "OBS",
@@ -15190,7 +15276,7 @@
      "security"
     ]
    },
-   "n": 896
+   "n": 901
   },
   "Trace Sampling, Propagation & Context Loss": {
    "group": "OBS",
@@ -15206,7 +15292,7 @@
      "security"
     ]
    },
-   "n": 897
+   "n": 902
   },
   "Error Tracking (Sentry, Rollbar, Bugsnag)": {
    "group": "OBS",
@@ -15222,7 +15308,7 @@
      "security"
     ]
    },
-   "n": 898
+   "n": 903
   },
   "Exception Grouping, Noise & Ignore Rules": {
    "group": "OBS",
@@ -15238,7 +15324,7 @@
      "security"
     ]
    },
-   "n": 899
+   "n": 904
   },
   "Profiling in Production & Continuous Profiling": {
    "group": "OBS",
@@ -15254,7 +15340,7 @@
      "security"
     ]
    },
-   "n": 900
+   "n": 905
   },
   "Observability Pipelines & Cost Control (OTel Collector, Vector)": {
    "group": "OBS",
@@ -15270,7 +15356,7 @@
      "security"
     ]
    },
-   "n": 901
+   "n": 906
   },
   "Observability for Serverless & Edge": {
    "group": "OBS",
@@ -15286,7 +15372,7 @@
      "security"
     ]
    },
-   "n": 902
+   "n": 907
   },
   "Frontend & Mobile Telemetry (RUM, crash, session replay)": {
    "group": "OBS",
@@ -15302,7 +15388,7 @@
      "security"
     ]
    },
-   "n": 903
+   "n": 908
   },
   "Runbooks, Dashboards-as-Code & Observability Hygiene": {
    "group": "OBS",
@@ -15318,7 +15404,7 @@
      "security"
     ]
    },
-   "n": 904
+   "n": 909
   },
   "Health Checks Design (deep vs shallow, dependencies)": {
    "group": "OBS",
@@ -15334,7 +15420,7 @@
      "security"
     ]
    },
-   "n": 905
+   "n": 910
   },
   "ETL / ELT Pipelines & Orchestration": {
    "group": "DATA",
@@ -15350,7 +15436,7 @@
      "qa"
     ]
    },
-   "n": 906
+   "n": 911
   },
   "dbt Models, Tests & Transformations": {
    "group": "DATA",
@@ -15366,7 +15452,7 @@
      "qa"
     ]
    },
-   "n": 907
+   "n": 912
   },
   "Data Warehouses (BigQuery, Snowflake, Redshift, Synapse)": {
    "group": "DATA",
@@ -15382,7 +15468,7 @@
      "qa"
     ]
    },
-   "n": 908
+   "n": 913
   },
   "Data Lakes, Lakehouse & File Formats (Parquet, Delta, Iceberg)": {
    "group": "DATA",
@@ -15398,7 +15484,7 @@
      "qa"
     ]
    },
-   "n": 909
+   "n": 914
   },
   "Spark, Databricks & Distributed Processing": {
    "group": "DATA",
@@ -15414,7 +15500,7 @@
      "qa"
     ]
    },
-   "n": 910
+   "n": 915
   },
   "Streaming Analytics (Flink, Kafka Streams, ksqlDB)": {
    "group": "DATA",
@@ -15430,7 +15516,7 @@
      "qa"
     ]
    },
-   "n": 911
+   "n": 916
   },
   "Change Data Capture & Replication to Analytics": {
    "group": "DATA",
@@ -15446,7 +15532,7 @@
      "qa"
     ]
    },
-   "n": 912
+   "n": 917
   },
   "Data Modeling (star schema, dimensions, facts, SCD)": {
    "group": "DATA",
@@ -15462,7 +15548,7 @@
      "qa"
     ]
    },
-   "n": 913
+   "n": 918
   },
   "Incremental Loads, Backfills & Idempotent Pipelines": {
    "group": "DATA",
@@ -15478,7 +15564,7 @@
      "qa"
     ]
    },
-   "n": 914
+   "n": 919
   },
   "Data Quality, Validation & Freshness Checks": {
    "group": "DATA",
@@ -15494,7 +15580,7 @@
      "qa"
     ]
    },
-   "n": 915
+   "n": 920
   },
   "Schema Evolution & Data Contracts": {
    "group": "DATA",
@@ -15510,7 +15596,7 @@
      "qa"
     ]
    },
-   "n": 916
+   "n": 921
   },
   "Data Catalog, Lineage & Governance": {
    "group": "DATA",
@@ -15528,7 +15614,7 @@
      "compliance"
     ]
    },
-   "n": 917
+   "n": 922
   },
   "Data Access Control & Row/Column Masking (analytics)": {
    "group": "DATA",
@@ -15546,7 +15632,7 @@
      "compliance"
     ]
    },
-   "n": 918
+   "n": 923
   },
   "Data Retention, Partition Expiry & Archival (analytics)": {
    "group": "DATA",
@@ -15562,7 +15648,7 @@
      "qa"
     ]
    },
-   "n": 919
+   "n": 924
   },
   "Pipeline Monitoring, SLAs & Failure Handling": {
    "group": "DATA",
@@ -15578,7 +15664,7 @@
      "qa"
     ]
    },
-   "n": 920
+   "n": 925
   },
   "Data Migration Between Systems (one-off loads)": {
    "group": "DATA",
@@ -15594,7 +15680,7 @@
      "qa"
     ]
    },
-   "n": 921
+   "n": 926
   },
   "Spreadsheet, CSV & Excel Data Handling": {
    "group": "DATA",
@@ -15610,7 +15696,7 @@
      "qa"
     ]
    },
-   "n": 922
+   "n": 927
   },
   "Python Data Stack (pandas, Polars, NumPy, notebooks)": {
    "group": "DATA",
@@ -15626,7 +15712,7 @@
      "qa"
     ]
    },
-   "n": 923
+   "n": 928
   },
   "BI Dashboards (Power BI, Metabase, Looker, Tableau, Superset)": {
    "group": "DATA",
@@ -15642,7 +15728,7 @@
      "qa"
     ]
    },
-   "n": 924
+   "n": 929
   },
   "Metabase Setup, Questions & Embedding": {
    "group": "DATA",
@@ -15658,7 +15744,7 @@
      "qa"
     ]
    },
-   "n": 925
+   "n": 930
   },
   "Power BI, Looker & Tableau Modeling": {
    "group": "DATA",
@@ -15674,7 +15760,7 @@
      "qa"
     ]
    },
-   "n": 926
+   "n": 931
   },
   "Reporting SQL & Analytical Queries": {
    "group": "DATA",
@@ -15690,7 +15776,7 @@
      "qa"
     ]
    },
-   "n": 927,
+   "n": 932,
    "suggest": [
     "dynamicwhere"
    ]
@@ -15709,7 +15795,7 @@
      "qa"
     ]
    },
-   "n": 928
+   "n": 933
   },
   "Analytics & Tracking Events": {
    "group": "DATA",
@@ -15725,7 +15811,7 @@
      "qa"
     ]
    },
-   "n": 929
+   "n": 934
   },
   "Event Taxonomy, Naming & Tracking Plans": {
    "group": "DATA",
@@ -15741,7 +15827,7 @@
      "qa"
     ]
    },
-   "n": 930
+   "n": 935
   },
   "Attribution, Campaigns & Marketing Analytics": {
    "group": "DATA",
@@ -15757,7 +15843,7 @@
      "qa"
     ]
    },
-   "n": 931
+   "n": 936
   },
   "Product Analytics (funnels, retention, cohorts)": {
    "group": "DATA",
@@ -15773,7 +15859,7 @@
      "qa"
     ]
    },
-   "n": 932
+   "n": 937
   },
   "A/B Testing & Experiment Analysis": {
    "group": "DATA",
@@ -15789,7 +15875,7 @@
      "qa"
     ]
    },
-   "n": 933
+   "n": 938
   },
   "Report Scheduling, Delivery & Subscriptions": {
    "group": "DATA",
@@ -15805,7 +15891,7 @@
      "qa"
     ]
    },
-   "n": 934
+   "n": 939
   },
   "Dashboard Performance & Query Cost (BI)": {
    "group": "DATA",
@@ -15821,7 +15907,7 @@
      "qa"
     ]
    },
-   "n": 935
+   "n": 940
   },
   "Data Export APIs & Customer-facing Analytics": {
    "group": "DATA",
@@ -15837,7 +15923,7 @@
      "qa"
     ]
    },
-   "n": 936,
+   "n": 941,
    "suggest": [
     "dynamicwhere"
    ]
@@ -15856,7 +15942,7 @@
      "qa"
     ]
    },
-   "n": 937
+   "n": 942
   },
   "Data Visualization Correctness (axes, aggregation, bias)": {
    "group": "DATA",
@@ -15872,7 +15958,7 @@
      "qa"
     ]
    },
-   "n": 938
+   "n": 943
   },
   "Geospatial Analytics & Maps Data": {
    "group": "DATA",
@@ -15888,7 +15974,7 @@
      "qa"
     ]
    },
-   "n": 939
+   "n": 944
   },
   "Logs & Events as Data (clickstream, telemetry analytics)": {
    "group": "DATA",
@@ -15904,7 +15990,7 @@
      "qa"
     ]
    },
-   "n": 940
+   "n": 945
   },
   "AI / LLM Integration": {
    "group": "AI",
@@ -15923,7 +16009,7 @@
    "ov": {
     "Analyse": "opus·medium"
    },
-   "n": 941
+   "n": 946
   },
   "Prompt Engineering & System Prompts": {
    "group": "AI",
@@ -15939,7 +16025,7 @@
      "security"
     ]
    },
-   "n": 942
+   "n": 947
   },
   "Agents, Tool Use & Function Calling": {
    "group": "AI",
@@ -15955,7 +16041,7 @@
      "security"
     ]
    },
-   "n": 943
+   "n": 948
   },
   "RAG, Chunking & Retrieval Quality": {
    "group": "AI",
@@ -15971,7 +16057,7 @@
      "security"
     ]
    },
-   "n": 944
+   "n": 949
   },
   "Embeddings & Vector Databases": {
    "group": "AI",
@@ -15987,7 +16073,7 @@
      "security"
     ]
    },
-   "n": 945
+   "n": 950
   },
   "Structured Output, JSON Mode & Parsing LLM Replies": {
    "group": "AI",
@@ -16003,7 +16089,7 @@
      "security"
     ]
    },
-   "n": 946
+   "n": 951
   },
   "Streaming, Token Limits & Context Management": {
    "group": "AI",
@@ -16019,7 +16105,7 @@
      "security"
     ]
    },
-   "n": 947
+   "n": 952
   },
   "LLM Cost, Caching & Model Selection": {
    "group": "AI",
@@ -16035,7 +16121,7 @@
      "security"
     ]
    },
-   "n": 948
+   "n": 953
   },
   "Hallucination, Grounding & Citations": {
    "group": "AI",
@@ -16051,7 +16137,7 @@
      "security"
     ]
    },
-   "n": 949
+   "n": 954
   },
   "Evals, Benchmarks & Regression Testing for LLMs": {
    "group": "AI",
@@ -16067,7 +16153,7 @@
      "security"
     ]
    },
-   "n": 950
+   "n": 955
   },
   "Guardrails, Safety & Prompt Injection": {
    "group": "AI",
@@ -16084,7 +16170,7 @@
      "security"
     ]
    },
-   "n": 951
+   "n": 956
   },
   "LLM Observability & Tracing (LangSmith, Langfuse)": {
    "group": "AI",
@@ -16100,7 +16186,7 @@
      "security"
     ]
    },
-   "n": 952
+   "n": 957
   },
   "Conversational Memory & Personalization": {
    "group": "AI",
@@ -16118,7 +16204,7 @@
      "compliance"
     ]
    },
-   "n": 953
+   "n": 958
   },
   "Multimodal (vision, audio, documents) & OCR": {
    "group": "AI",
@@ -16134,7 +16220,7 @@
      "security"
     ]
    },
-   "n": 954
+   "n": 959
   },
   "Chatbots, Assistants & Copilots UX Logic": {
    "group": "AI",
@@ -16150,7 +16236,7 @@
      "security"
     ]
    },
-   "n": 955
+   "n": 960
   },
   "AI Feature Product Decisions & Scope": {
    "group": "AI",
@@ -16166,7 +16252,7 @@
      "security"
     ]
    },
-   "n": 956
+   "n": 961
   },
   "Fine-tuning, LoRA & Model Customization": {
    "group": "AI",
@@ -16182,7 +16268,7 @@
      "security"
     ]
    },
-   "n": 957
+   "n": 962
   },
   "Classical ML Models (classification, regression, clustering)": {
    "group": "AI",
@@ -16198,7 +16284,7 @@
      "security"
     ]
    },
-   "n": 958
+   "n": 963
   },
   "Recommendation Systems & Ranking": {
    "group": "AI",
@@ -16214,7 +16300,7 @@
      "security"
     ]
    },
-   "n": 959
+   "n": 964
   },
   "Forecasting & Anomaly Detection Models": {
    "group": "AI",
@@ -16230,7 +16316,7 @@
      "security"
     ]
    },
-   "n": 960
+   "n": 965
   },
   "Model Evaluation, Metrics & Validation": {
    "group": "AI",
@@ -16246,7 +16332,7 @@
      "security"
     ]
    },
-   "n": 961
+   "n": 966
   },
   "Feature Stores & Training Data Pipelines": {
    "group": "AI",
@@ -16262,7 +16348,7 @@
      "security"
     ]
    },
-   "n": 962
+   "n": 967
   },
   "Model Serving, Inference & Latency": {
    "group": "AI",
@@ -16278,7 +16364,7 @@
      "security"
     ]
    },
-   "n": 963
+   "n": 968
   },
   "MLOps (experiment tracking, registry, deployment)": {
    "group": "AI",
@@ -16294,7 +16380,7 @@
      "security"
     ]
    },
-   "n": 964
+   "n": 969
   },
   "Model Monitoring, Drift & Retraining": {
    "group": "AI",
@@ -16310,7 +16396,7 @@
      "security"
     ]
    },
-   "n": 965
+   "n": 970
   },
   "GPU, Compute & Training Infrastructure": {
    "group": "AI",
@@ -16326,7 +16412,7 @@
      "security"
     ]
    },
-   "n": 966
+   "n": 971
   },
   "AI Ethics, Bias & Fairness": {
    "group": "AI",
@@ -16344,7 +16430,7 @@
      "compliance"
     ]
    },
-   "n": 967
+   "n": 972
   },
   "AI Data Governance & Training Data Rights": {
    "group": "AI",
@@ -16362,7 +16448,7 @@
      "compliance"
     ]
    },
-   "n": 968
+   "n": 973
   },
   "Speech, Vision & Specialized Models": {
    "group": "AI",
@@ -16378,7 +16464,7 @@
      "security"
     ]
    },
-   "n": 969
+   "n": 974
   },
   "Edge & On-device ML (Core ML, TFLite, ONNX Runtime)": {
    "group": "AI",
@@ -16394,7 +16480,7 @@
      "security"
     ]
    },
-   "n": 970
+   "n": 975
   },
   "MCP Servers & Connectors": {
    "group": "AI",
@@ -16410,7 +16496,7 @@
      "security"
     ]
    },
-   "n": 971
+   "n": 976
   },
   "Claude Code Plugins, Hooks & Skills": {
    "group": "AI",
@@ -16426,7 +16512,7 @@
      "security"
     ]
    },
-   "n": 972
+   "n": 977
   },
   "Agent Orchestration Design (routing, budgets, handoffs)": {
    "group": "AI",
@@ -16442,7 +16528,7 @@
      "security"
     ]
    },
-   "n": 973
+   "n": 978
   },
   "Agent Safety, Permissions & Sandboxing": {
    "group": "AI",
@@ -16459,7 +16545,7 @@
      "security"
     ]
    },
-   "n": 974
+   "n": 979
   },
   "Prompt & Context Files (CLAUDE.md, AGENTS.md, cursor rules)": {
    "group": "AI",
@@ -16475,7 +16561,7 @@
      "security"
     ]
    },
-   "n": 975
+   "n": 980
   },
   "AI Coding Assistants Workflow & Productivity": {
    "group": "AI",
@@ -16491,7 +16577,7 @@
      "security"
     ]
    },
-   "n": 976
+   "n": 981
   },
   "LLM API SDKs & Provider Integration (Anthropic, OpenAI, Bedrock, Vertex)": {
    "group": "AI",
@@ -16507,7 +16593,7 @@
      "security"
     ]
    },
-   "n": 977
+   "n": 982
   },
   "Token Accounting, Quotas & Usage Reporting": {
    "group": "AI",
@@ -16523,7 +16609,7 @@
      "security"
     ]
    },
-   "n": 978
+   "n": 983
   },
   "Jira, Confluence & Atlassian Integration": {
    "group": "INT",
@@ -16539,7 +16625,7 @@
      "security"
     ]
    },
-   "n": 979
+   "n": 984
   },
   "Slack, Teams & Discord Bots": {
    "group": "INT",
@@ -16555,7 +16641,7 @@
      "security"
     ]
    },
-   "n": 980
+   "n": 985
   },
   "GitHub & GitLab API Integrations": {
    "group": "INT",
@@ -16571,7 +16657,7 @@
      "security"
     ]
    },
-   "n": 981
+   "n": 986
   },
   "ERP Integrations (SAP, Oracle, Odoo, Dynamics, NetSuite)": {
    "group": "INT",
@@ -16589,7 +16675,7 @@
      "finance"
     ]
    },
-   "n": 982
+   "n": 987
   },
   "CRM Integrations (Salesforce, HubSpot, Zoho)": {
    "group": "INT",
@@ -16605,7 +16691,7 @@
      "security"
     ]
    },
-   "n": 983
+   "n": 988
   },
   "Accounting Software Integrations (QuickBooks, Xero, Zoho Books)": {
    "group": "INT",
@@ -16623,7 +16709,7 @@
      "finance"
     ]
    },
-   "n": 984
+   "n": 989
   },
   "E-commerce Platforms (Shopify, WooCommerce, Magento)": {
    "group": "INT",
@@ -16639,7 +16725,7 @@
      "security"
     ]
    },
-   "n": 985
+   "n": 990
   },
   "Government, Tax & E-invoicing Portals": {
    "group": "INT",
@@ -16659,7 +16745,7 @@
      "compliance"
     ]
    },
-   "n": 986
+   "n": 991
   },
   "HR, Payroll & Identity Systems (Workday, BambooHR, SCIM)": {
    "group": "INT",
@@ -16675,7 +16761,7 @@
      "security"
     ]
    },
-   "n": 987
+   "n": 992
   },
   "Calendar, Email & Office Integrations (Google, Microsoft 365)": {
    "group": "INT",
@@ -16691,7 +16777,7 @@
      "security"
     ]
    },
-   "n": 988
+   "n": 993
   },
   "Document Signing & Storage (DocuSign, Dropbox, Box)": {
    "group": "INT",
@@ -16707,7 +16793,7 @@
      "security"
     ]
    },
-   "n": 989
+   "n": 994
   },
   "Zapier, Make, n8n & iPaaS Automation": {
    "group": "INT",
@@ -16723,7 +16809,7 @@
      "security"
     ]
    },
-   "n": 990
+   "n": 995
   },
   "SMS & Voice Providers (Twilio, Vonage, local gateways)": {
    "group": "INT",
@@ -16739,7 +16825,7 @@
      "security"
     ]
    },
-   "n": 991
+   "n": 996
   },
   "Email Providers (SendGrid, SES, Postmark, Mailgun, Resend)": {
    "group": "INT",
@@ -16755,7 +16841,7 @@
      "security"
     ]
    },
-   "n": 992
+   "n": 997
   },
   "WhatsApp Business, Telegram & Chat Channels": {
    "group": "INT",
@@ -16771,7 +16857,7 @@
      "security"
     ]
    },
-   "n": 993
+   "n": 998
   },
   "Push Providers (FCM, APNs, OneSignal)": {
    "group": "INT",
@@ -16787,7 +16873,7 @@
      "security"
     ]
    },
-   "n": 994
+   "n": 999
   },
   "Video, Audio & Streaming Services (Agora, Twilio Video, Mux, YouTube API)": {
    "group": "INT",
@@ -16803,7 +16889,7 @@
      "security"
     ]
    },
-   "n": 995
+   "n": 1000
   },
   "Maps, Geocoding & Places (Google Maps, Mapbox, OSM)": {
    "group": "INT",
@@ -16819,7 +16905,7 @@
      "security"
     ]
    },
-   "n": 996
+   "n": 1001
   },
   "Translation & Content APIs (Google Translate, DeepL)": {
    "group": "INT",
@@ -16835,7 +16921,7 @@
      "security"
     ]
    },
-   "n": 997
+   "n": 1002
   },
   "File Conversion & Document APIs (PDF services, OCR vendors)": {
    "group": "INT",
@@ -16851,7 +16937,7 @@
      "security"
     ]
    },
-   "n": 998
+   "n": 1003
   },
   "Payment Providers (Stripe, Adyen, PayPal, local PSPs)": {
    "group": "INT",
@@ -16869,7 +16955,7 @@
      "finance"
     ]
    },
-   "n": 999
+   "n": 1004
   },
   "Banking APIs & Open Banking": {
    "group": "INT",
@@ -16887,7 +16973,7 @@
      "finance"
     ]
    },
-   "n": 1000
+   "n": 1005
   },
   "Identity Verification & KYC Vendors": {
    "group": "INT",
@@ -16905,7 +16991,7 @@
      "compliance"
     ]
    },
-   "n": 1001
+   "n": 1006
   },
   "Social Login & Identity Providers (Google, Apple, Microsoft, Auth0, Clerk)": {
    "group": "INT",
@@ -16921,7 +17007,7 @@
      "security"
     ]
    },
-   "n": 1002
+   "n": 1007
   },
   "Shipping & Logistics APIs (DHL, FedEx, Aramex, local couriers)": {
    "group": "INT",
@@ -16937,7 +17023,7 @@
      "security"
     ]
    },
-   "n": 1003
+   "n": 1008
   },
   "Ad & Marketing Platforms (Meta Ads, Google Ads, Mailchimp)": {
    "group": "INT",
@@ -16953,7 +17039,7 @@
      "security"
     ]
    },
-   "n": 1004
+   "n": 1009
   },
   "Analytics & Data Vendors (Segment, Amplitude, Mixpanel, GA4)": {
    "group": "INT",
@@ -16969,7 +17055,7 @@
      "security"
     ]
    },
-   "n": 1005
+   "n": 1010
   },
   "Search & AI Vendors (Algolia, OpenAI, Anthropic, ElevenLabs)": {
    "group": "INT",
@@ -16985,7 +17071,7 @@
      "security"
     ]
    },
-   "n": 1006
+   "n": 1011
   },
   "Partner & Public API Programs (keys, quotas, docs for partners)": {
    "group": "INT",
@@ -17001,7 +17087,7 @@
      "security"
     ]
    },
-   "n": 1007
+   "n": 1012
   },
   "OAuth Client Flows & Token Refresh for Integrations": {
    "group": "INT",
@@ -17017,7 +17103,7 @@
      "security"
     ]
    },
-   "n": 1008
+   "n": 1013
   },
   "Webhook Receivers (verification, retries, replay)": {
    "group": "INT",
@@ -17033,7 +17119,7 @@
      "security"
     ]
    },
-   "n": 1009
+   "n": 1014
   },
   "Polling vs Webhooks & Sync Strategies": {
    "group": "INT",
@@ -17049,7 +17135,7 @@
      "security"
     ]
    },
-   "n": 1010
+   "n": 1015
   },
   "Vendor Rate Limits, Quotas & Backoff": {
    "group": "INT",
@@ -17065,7 +17151,7 @@
      "security"
     ]
    },
-   "n": 1011
+   "n": 1016
   },
   "Data Mapping, Transformation & Field Mapping": {
    "group": "INT",
@@ -17081,7 +17167,7 @@
      "security"
     ]
    },
-   "n": 1012
+   "n": 1017
   },
   "Sandbox vs Production Credentials & Environments": {
    "group": "INT",
@@ -17097,7 +17183,7 @@
      "security"
     ]
    },
-   "n": 1013
+   "n": 1018
   },
   "Integration Error Handling & Partial Failures": {
    "group": "INT",
@@ -17113,7 +17199,7 @@
      "security"
     ]
    },
-   "n": 1014
+   "n": 1019
   },
   "Integration Monitoring, Logs & Replay Tools": {
    "group": "INT",
@@ -17129,7 +17215,7 @@
      "security"
     ]
    },
-   "n": 1015
+   "n": 1020
   },
   "Vendor Evaluation, Contracts & Lock-in": {
    "group": "INT",
@@ -17145,7 +17231,7 @@
      "security"
     ]
    },
-   "n": 1016
+   "n": 1021
   },
   "SDK Versioning & Vendor API Deprecations": {
    "group": "INT",
@@ -17161,7 +17247,7 @@
      "security"
     ]
    },
-   "n": 1017
+   "n": 1022
   },
   "File-based Integrations (SFTP drops, CSV feeds, EDI)": {
    "group": "INT",
@@ -17177,7 +17263,7 @@
      "security"
     ]
    },
-   "n": 1018
+   "n": 1023
   },
   "Legacy Protocols (SOAP, XML-RPC, WSDL, FTP)": {
    "group": "INT",
@@ -17193,7 +17279,7 @@
      "security"
     ]
    },
-   "n": 1019
+   "n": 1024
   },
   "Work on Document (README, guides)": {
    "group": "DOCS",
@@ -17204,7 +17290,7 @@
     "3": [],
     "4": []
    },
-   "n": 1020
+   "n": 1025
   },
   "Code Match Documents (docs vs code drift)": {
    "group": "DOCS",
@@ -17218,7 +17304,7 @@
    "caps": {
     "Analyse": 40
    },
-   "n": 1021
+   "n": 1026
   },
   "API Docs (OpenAPI / Swagger)": {
    "group": "DOCS",
@@ -17229,7 +17315,7 @@
     "3": [],
     "4": []
    },
-   "n": 1022
+   "n": 1027
   },
   "Runbooks & Operational Procedures": {
    "group": "DOCS",
@@ -17240,7 +17326,7 @@
     "3": [],
     "4": []
    },
-   "n": 1023
+   "n": 1028
   },
   "Onboarding Docs & Developer Setup Guides": {
    "group": "DOCS",
@@ -17251,7 +17337,7 @@
     "3": [],
     "4": []
    },
-   "n": 1024
+   "n": 1029
   },
   "Architecture & Design Docs (RFCs, design docs)": {
    "group": "DOCS",
@@ -17262,7 +17348,7 @@
     "3": [],
     "4": []
    },
-   "n": 1025
+   "n": 1030
   },
   "Changelogs, Release Notes & Migration Guides": {
    "group": "DOCS",
@@ -17273,7 +17359,7 @@
     "3": [],
     "4": []
    },
-   "n": 1026
+   "n": 1031
   },
   "Inline Help, Tooltips & In-app Documentation": {
    "group": "DOCS",
@@ -17284,7 +17370,7 @@
     "3": [],
     "4": []
    },
-   "n": 1027
+   "n": 1032
   },
   "Diagrams (Mermaid, PlantUML, sequence, ERD)": {
    "group": "DOCS",
@@ -17295,7 +17381,7 @@
     "3": [],
     "4": []
    },
-   "n": 1028
+   "n": 1033
   },
   "Docs Sites & Tooling (Docusaurus, MkDocs, Docsify, Starlight)": {
    "group": "DOCS",
@@ -17306,7 +17392,7 @@
     "3": [],
     "4": []
    },
-   "n": 1029
+   "n": 1034
   },
   "Code Examples, Snippets & Tutorials": {
    "group": "DOCS",
@@ -17317,7 +17403,7 @@
     "3": [],
     "4": []
    },
-   "n": 1030
+   "n": 1035
   },
   "Comments & Documentation Standards": {
    "group": "DOCS",
@@ -17328,7 +17414,7 @@
     "3": [],
     "4": []
    },
-   "n": 1031
+   "n": 1036
   },
   "Knowledge Base, Wiki & Decision Capture": {
    "group": "DOCS",
@@ -17339,7 +17425,7 @@
     "3": [],
     "4": []
    },
-   "n": 1032
+   "n": 1037
   },
   "Legal & Marketing Content & Translation": {
    "group": "DOCS",
@@ -17353,7 +17439,7 @@
    "ov": {
     "Analyse": "opus·medium"
    },
-   "n": 1033
+   "n": 1038
   },
   "i18n & l10n (strings, locales)": {
    "group": "DOCS",
@@ -17364,7 +17450,7 @@
     "3": [],
     "4": []
    },
-   "n": 1034
+   "n": 1039
   },
   "Translation Workflow & Translation Management (Crowdin, Lokalise)": {
    "group": "DOCS",
@@ -17375,7 +17461,7 @@
     "3": [],
     "4": []
    },
-   "n": 1035
+   "n": 1040
   },
   "Arabic & RTL Content Rules": {
    "group": "DOCS",
@@ -17386,7 +17472,7 @@
     "3": [],
     "4": []
    },
-   "n": 1036
+   "n": 1041
   },
   "UX Copy & Error Message Text (content)": {
    "group": "DOCS",
@@ -17397,7 +17483,7 @@
     "3": [],
     "4": []
    },
-   "n": 1037
+   "n": 1042
   },
   "Email & Notification Copy": {
    "group": "DOCS",
@@ -17408,7 +17494,7 @@
     "3": [],
     "4": []
    },
-   "n": 1038
+   "n": 1043
   },
   "Marketing Pages, Blog & SEO Content": {
    "group": "DOCS",
@@ -17419,7 +17505,7 @@
     "3": [],
     "4": []
    },
-   "n": 1039
+   "n": 1044
   },
   "Legal Text (terms, privacy, licenses, disclaimers)": {
    "group": "DOCS",
@@ -17434,7 +17520,7 @@
      "compliance"
     ]
    },
-   "n": 1040
+   "n": 1045
   },
   "Open-source Licensing & Attribution": {
    "group": "DOCS",
@@ -17445,7 +17531,7 @@
     "3": [],
     "4": []
    },
-   "n": 1041
+   "n": 1046
   },
   "Brand Voice, Tone & Style Guides": {
    "group": "DOCS",
@@ -17456,7 +17542,7 @@
     "3": [],
     "4": []
    },
-   "n": 1042
+   "n": 1047
   },
   "Accessibility of Content (alt text, captions, plain language)": {
    "group": "DOCS",
@@ -17467,7 +17553,7 @@
     "3": [],
     "4": []
    },
-   "n": 1043
+   "n": 1048
   },
   "Generated Docs from Code (XML docs, docstrings, typedoc)": {
    "group": "DOCS",
@@ -17478,7 +17564,7 @@
     "3": [],
     "4": []
    },
-   "n": 1044
+   "n": 1049
   },
   "Codebase Exploration & Onboarding": {
    "group": "DOCS",
@@ -17492,7 +17578,7 @@
    "caps": {
     "Read": 120
    },
-   "n": 1045
+   "n": 1050
   },
   "Explaining Code & Walkthroughs": {
    "group": "DOCS",
@@ -17503,7 +17589,7 @@
     "3": [],
     "4": []
    },
-   "n": 1046
+   "n": 1051
   },
   "Dependency & Usage Mapping": {
    "group": "DOCS",
@@ -17514,7 +17600,7 @@
     "3": [],
     "4": []
    },
-   "n": 1047
+   "n": 1052
   },
   "Reading Logs, Configs & Data Files (explore)": {
    "group": "DOCS",
@@ -17525,7 +17611,7 @@
     "3": [],
     "4": []
    },
-   "n": 1048
+   "n": 1053
   },
   "Repository Inventory & Tech Stack Discovery": {
    "group": "DOCS",
@@ -17536,7 +17622,7 @@
     "3": [],
     "4": []
    },
-   "n": 1049
+   "n": 1054
   },
   "Git History & Blame Investigation": {
    "group": "DOCS",
@@ -17547,7 +17633,7 @@
     "3": [],
     "4": []
    },
-   "n": 1050
+   "n": 1055
   },
   "Comparing Implementations & Reference Reading": {
    "group": "DOCS",
@@ -17558,7 +17644,7 @@
     "3": [],
     "4": []
    },
-   "n": 1051
+   "n": 1056
   },
   "Glossary, Domain Terms & Ubiquitous Language (docs)": {
    "group": "DOCS",
@@ -17569,7 +17655,7 @@
     "3": [],
     "4": []
    },
-   "n": 1052
+   "n": 1057
   },
   "Meeting Notes, Summaries & Handover Docs": {
    "group": "DOCS",
@@ -17580,7 +17666,7 @@
     "3": [],
     "4": []
    },
-   "n": 1053
+   "n": 1058
   },
   "Presentations, Slides & Demos": {
    "group": "DOCS",
@@ -17591,7 +17677,7 @@
     "3": [],
     "4": []
    },
-   "n": 1054
+   "n": 1059
   },
   "Check MVP vs Advance": {
    "group": "PROD",
@@ -17610,7 +17696,7 @@
     "Work": "sonnet·medium",
     "Verify": "sonnet·low"
    },
-   "n": 1055
+   "n": 1060
   },
   "Feature Scoping & Requirements": {
    "group": "PROD",
@@ -17628,7 +17714,7 @@
    "ov": {
     "Work": "sonnet·medium"
    },
-   "n": 1056
+   "n": 1061
   },
   "User Stories, Epics & Ticket Writing": {
    "group": "PROD",
@@ -17643,7 +17729,7 @@
      "qa"
     ]
    },
-   "n": 1057
+   "n": 1062
   },
   "Estimation, Sizing & Planning Poker": {
    "group": "PROD",
@@ -17658,7 +17744,7 @@
      "qa"
     ]
    },
-   "n": 1058
+   "n": 1063
   },
   "Prioritization Frameworks (RICE, MoSCoW, WSJF)": {
    "group": "PROD",
@@ -17673,7 +17759,7 @@
      "qa"
     ]
    },
-   "n": 1059
+   "n": 1064
   },
   "Roadmaps, Milestones & Release Planning": {
    "group": "PROD",
@@ -17688,7 +17774,7 @@
      "qa"
     ]
    },
-   "n": 1060
+   "n": 1065
   },
   "Trade-offs, Alternatives & Recommendation Writing": {
    "group": "PROD",
@@ -17703,7 +17789,7 @@
      "qa"
     ]
    },
-   "n": 1061
+   "n": 1066
   },
   "Competitor & Feature Parity Check": {
    "group": "PROD",
@@ -17721,7 +17807,7 @@
    "ov": {
     "Read": "sonnet·low"
    },
-   "n": 1062
+   "n": 1067
   },
   "Non-goals, Constraints & Assumptions": {
    "group": "PROD",
@@ -17736,7 +17822,7 @@
      "qa"
     ]
    },
-   "n": 1063
+   "n": 1068
   },
   "Success Metrics & OKRs for Features": {
    "group": "PROD",
@@ -17751,7 +17837,7 @@
      "qa"
     ]
    },
-   "n": 1064
+   "n": 1069
   },
   "Pricing & Packaging Decisions (product)": {
    "group": "PROD",
@@ -17768,7 +17854,7 @@
      "finance"
     ]
    },
-   "n": 1065
+   "n": 1070
   },
   "Discovery, Problem Framing & Jobs to be Done": {
    "group": "PROD",
@@ -17783,7 +17869,7 @@
      "qa"
     ]
    },
-   "n": 1066
+   "n": 1071
   },
   "Agile Ceremonies, Sprints & Retrospectives": {
    "group": "PROD",
@@ -17798,7 +17884,7 @@
      "qa"
     ]
    },
-   "n": 1067
+   "n": 1072
   },
   "Ticket Workflow, Boards & Status Hygiene": {
    "group": "PROD",
@@ -17813,7 +17899,7 @@
      "qa"
     ]
    },
-   "n": 1068
+   "n": 1073
   },
   "Code Review Process & Turnaround": {
    "group": "PROD",
@@ -17828,7 +17914,7 @@
      "qa"
     ]
    },
-   "n": 1069
+   "n": 1074
   },
   "Definition of Ready & Refinement": {
    "group": "PROD",
@@ -17843,7 +17929,7 @@
      "qa"
     ]
    },
-   "n": 1070
+   "n": 1075
   },
   "Stakeholder Communication & Status Reporting": {
    "group": "PROD",
@@ -17858,7 +17944,7 @@
      "qa"
     ]
    },
-   "n": 1071
+   "n": 1076
   },
   "Risk Register & Dependency Tracking": {
    "group": "PROD",
@@ -17873,7 +17959,7 @@
      "qa"
     ]
    },
-   "n": 1072
+   "n": 1077
   },
   "Technical Debt Tracking & Prioritization": {
    "group": "PROD",
@@ -17888,7 +17974,7 @@
      "qa"
     ]
    },
-   "n": 1073
+   "n": 1078
   },
   "Incident, Bug & Feature Intake Process": {
    "group": "PROD",
@@ -17903,7 +17989,7 @@
      "qa"
     ]
    },
-   "n": 1074
+   "n": 1079
   },
   "Team Conventions, Guidelines & Policies": {
    "group": "PROD",
@@ -17918,7 +18004,7 @@
      "qa"
     ]
    },
-   "n": 1075
+   "n": 1080
   },
   "Dependency, License & Security Policy Decisions": {
    "group": "PROD",
@@ -17935,7 +18021,7 @@
      "security"
     ]
    },
-   "n": 1076
+   "n": 1081
   },
   "Hiring, Onboarding & Knowledge Transfer Plans": {
    "group": "PROD",
@@ -17950,7 +18036,7 @@
      "qa"
     ]
    },
-   "n": 1077
+   "n": 1082
   },
   "Estimating Cost, Budget & Resourcing": {
    "group": "PROD",
@@ -17965,7 +18051,7 @@
      "qa"
     ]
    },
-   "n": 1078
+   "n": 1083
   },
   "Experiments, Hypotheses & Learning Loops": {
    "group": "PROD",
@@ -17980,7 +18066,7 @@
      "qa"
     ]
    },
-   "n": 1079
+   "n": 1084
   },
   "Release Communication & Customer Announcements": {
    "group": "PROD",
@@ -17995,7 +18081,7 @@
      "qa"
     ]
    },
-   "n": 1080
+   "n": 1085
   },
   "Vendor & Contract Management (SaaS seats, renewals)": {
    "group": "PROD",
@@ -18010,7 +18096,7 @@
      "qa"
     ]
    },
-   "n": 1081
+   "n": 1086
   },
   "C# & .NET Runtime (language features, async, LINQ)": {
    "group": "LANG",
@@ -18026,7 +18112,7 @@
      "security"
     ]
    },
-   "n": 1082
+   "n": 1087
   },
   "Java & JVM (language, generics, streams, GC)": {
    "group": "LANG",
@@ -18042,7 +18128,7 @@
      "security"
     ]
    },
-   "n": 1083
+   "n": 1088
   },
   "Kotlin (language, coroutines)": {
    "group": "LANG",
@@ -18058,7 +18144,7 @@
      "security"
     ]
    },
-   "n": 1084
+   "n": 1089
   },
   "Python (language, typing, async, packaging)": {
    "group": "LANG",
@@ -18074,7 +18160,7 @@
      "security"
     ]
    },
-   "n": 1085
+   "n": 1090
   },
   "JavaScript (language, async, modules, Node runtime)": {
    "group": "LANG",
@@ -18090,7 +18176,7 @@
      "security"
     ]
    },
-   "n": 1086
+   "n": 1091
   },
   "TypeScript (types, generics, strictness, tsconfig)": {
    "group": "LANG",
@@ -18106,7 +18192,7 @@
      "security"
     ]
    },
-   "n": 1087
+   "n": 1092
   },
   "Go (language, goroutines, modules, errors)": {
    "group": "LANG",
@@ -18122,7 +18208,7 @@
      "security"
     ]
    },
-   "n": 1088
+   "n": 1093
   },
   "Rust (ownership, async, cargo)": {
    "group": "LANG",
@@ -18138,7 +18224,7 @@
      "security"
     ]
    },
-   "n": 1089
+   "n": 1094
   },
   "PHP (language, Composer, versions)": {
    "group": "LANG",
@@ -18154,7 +18240,7 @@
      "security"
     ]
    },
-   "n": 1090
+   "n": 1095
   },
   "Ruby (language, gems, metaprogramming)": {
    "group": "LANG",
@@ -18170,7 +18256,7 @@
      "security"
     ]
    },
-   "n": 1091
+   "n": 1096
   },
   "C & C++ (memory, build, UB)": {
    "group": "LANG",
@@ -18186,7 +18272,7 @@
      "security"
     ]
    },
-   "n": 1092
+   "n": 1097
   },
   "Swift & Objective-C (language)": {
    "group": "LANG",
@@ -18202,7 +18288,7 @@
      "security"
     ]
    },
-   "n": 1093
+   "n": 1098
   },
   "Dart, Elixir, Scala & Other Languages": {
    "group": "LANG",
@@ -18218,7 +18304,7 @@
      "security"
     ]
    },
-   "n": 1094
+   "n": 1099
   },
   "SQL Procedural Languages (PL/pgSQL, T-SQL, PL/SQL code)": {
    "group": "LANG",
@@ -18234,7 +18320,7 @@
      "security"
     ]
    },
-   "n": 1095
+   "n": 1100
   },
   "Shell, Bash & PowerShell (language)": {
    "group": "LANG",
@@ -18250,7 +18336,7 @@
      "security"
     ]
    },
-   "n": 1096
+   "n": 1101
   },
   "Regular Expressions & Text Parsing": {
    "group": "LANG",
@@ -18266,7 +18352,7 @@
      "security"
     ]
    },
-   "n": 1097
+   "n": 1102
   },
   "Date, Time & Timezone Libraries": {
    "group": "LANG",
@@ -18282,7 +18368,7 @@
      "security"
     ]
    },
-   "n": 1098
+   "n": 1103
   },
   "Numeric Types, Floating Point & Big Numbers": {
    "group": "LANG",
@@ -18298,7 +18384,7 @@
      "security"
     ]
    },
-   "n": 1099
+   "n": 1104
   },
   "Strings, Encoding & Unicode": {
    "group": "LANG",
@@ -18314,7 +18400,7 @@
      "security"
     ]
    },
-   "n": 1100
+   "n": 1105
   },
   "Collections, Iterators & Data Structures": {
    "group": "LANG",
@@ -18330,7 +18416,7 @@
      "security"
     ]
    },
-   "n": 1101
+   "n": 1106
   },
   "Async, Concurrency & Parallelism Primitives": {
    "group": "LANG",
@@ -18346,7 +18432,7 @@
      "security"
     ]
    },
-   "n": 1102
+   "n": 1107
   },
   "Memory Management & Garbage Collection (runtime)": {
    "group": "LANG",
@@ -18362,7 +18448,7 @@
      "security"
     ]
    },
-   "n": 1103
+   "n": 1108
   },
   "Serialization Libraries (JSON, XML, Protobuf, MessagePack)": {
    "group": "LANG",
@@ -18378,7 +18464,7 @@
      "security"
     ]
    },
-   "n": 1104
+   "n": 1109
   },
   "Reflection, Metaprogramming & Dynamic Code": {
    "group": "LANG",
@@ -18394,7 +18480,7 @@
      "security"
     ]
    },
-   "n": 1105
+   "n": 1110
   },
   "Interop & FFI (native libraries, P/Invoke, WASM)": {
    "group": "LANG",
@@ -18410,7 +18496,7 @@
      "security"
     ]
    },
-   "n": 1106
+   "n": 1111
   },
   "Runtime Versions, EOL & Upgrade Paths": {
    "group": "LANG",
@@ -18426,7 +18512,7 @@
      "security"
     ]
    },
-   "n": 1107
+   "n": 1112
   },
   "Package Managers & Lockfiles (npm, pnpm, NuGet, pip, Maven, Composer)": {
    "group": "LANG",
@@ -18442,7 +18528,7 @@
      "security"
     ]
    },
-   "n": 1108
+   "n": 1113
   },
   "Dependency Resolution, Conflicts & Transitive Deps": {
    "group": "LANG",
@@ -18458,7 +18544,7 @@
      "security"
     ]
    },
-   "n": 1109
+   "n": 1114
   },
   "Monorepo Package Management & Workspaces": {
    "group": "LANG",
@@ -18474,7 +18560,7 @@
      "security"
     ]
    },
-   "n": 1110
+   "n": 1115
   },
   "Compilers, Transpilers & Build Targets": {
    "group": "LANG",
@@ -18490,7 +18576,7 @@
      "security"
     ]
    },
-   "n": 1111
+   "n": 1116
   },
   "Linters, Formatters & Static Analyzers per Language": {
    "group": "LANG",
@@ -18506,7 +18592,7 @@
      "security"
     ]
    },
-   "n": 1112
+   "n": 1117
   },
   "Language Server, IDE Tooling & Debuggers": {
    "group": "LANG",
@@ -18522,7 +18608,7 @@
      "security"
     ]
    },
-   "n": 1113
+   "n": 1118
   },
   "Scripting, CLI Tools & Automation Scripts": {
    "group": "LANG",
@@ -18538,7 +18624,7 @@
      "security"
     ]
    },
-   "n": 1114
+   "n": 1119
   },
   "Cross-platform Runtime Behaviour (paths, line endings, case)": {
    "group": "LANG",
@@ -18554,7 +18640,7 @@
      "security"
     ]
    },
-   "n": 1115
+   "n": 1120
   },
   "Native Extensions & Platform-specific Builds": {
    "group": "LANG",
@@ -18570,7 +18656,7 @@
      "security"
     ]
    },
-   "n": 1116
+   "n": 1121
   },
   "Standard Library vs Third-party Choices": {
    "group": "LANG",
@@ -18586,7 +18672,7 @@
      "security"
     ]
    },
-   "n": 1117
+   "n": 1122
   },
   "WebAssembly & Portable Runtimes": {
    "group": "LANG",
@@ -18602,7 +18688,7 @@
      "security"
     ]
    },
-   "n": 1118
+   "n": 1123
   },
   "Embedded, IoT & Firmware": {
    "group": "LANG",
@@ -18618,7 +18704,7 @@
      "security"
     ]
    },
-   "n": 1119
+   "n": 1124
   },
   "Game Development Engines & Loops (Unity, Godot, Unreal)": {
    "group": "LANG",
@@ -18634,7 +18720,7 @@
      "security"
     ]
    },
-   "n": 1120
+   "n": 1125
   },
   "Desktop GUI Frameworks (WPF, WinUI, Qt, GTK, Avalonia)": {
    "group": "LANG",
@@ -18650,7 +18736,7 @@
      "security"
     ]
    },
-   "n": 1121
+   "n": 1126
   },
   "Low-code, No-code & Spreadsheet Logic (Power Apps, AppSheet, Excel formulas)": {
    "group": "LANG",
@@ -18666,7 +18752,7 @@
      "security"
     ]
    },
-   "n": 1122
+   "n": 1127
   },
   "Blockchain & Smart Contracts": {
    "group": "LANG",
@@ -18685,7 +18771,7 @@
      "finance"
     ]
    },
-   "n": 1123
+   "n": 1128
   }
  },
  "tiers": {

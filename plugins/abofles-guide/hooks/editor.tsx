@@ -1,8 +1,9 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { Pane, PaneOverrideKey, PaneOverrides } from '../types'
-import { applyOverrides, card, claimSave, getPaneDraft, getPaneSaving, plain, refresh, releaseSave, setFold, setPaneView, updatePaneDraft } from './shared'
-import type { Folds, Ui } from './shared'
+import { overridesBlock } from './html'
+import { GLYPH, applyOverrides, buttonRow, card, glyph, hasSvg, htmlSection, emptyPic, pic, sections, type Look, claimSave, getPaneDraft, getPaneSaving, longText, plain, refresh, releaseSave, setFold, setPaneView, updatePaneDraft } from './shared'
+import type { Folds, IconName, Ui } from './shared'
 
 // The overrides of the Abo Fles pane, in two places. On the pane's main page, a short card: a table of the values a file sets
 // (key, value, which file), the other lines, and Edit. Edit turns the pane into the editor page, laid out as the app's settings:
@@ -29,6 +30,7 @@ const CUSTOM_KEYS: Record<string, { start: string; hint: string }> = {
 
 // The editor's groups, in order, and each key's group and help line. A key the table adds later lands in "More", without help.
 const GROUPS = ['Session', 'Agents', 'Output', 'Where it shows', 'More'] as const
+const GROUP_ICON: Record<(typeof GROUPS)[number], IconName> = { Session: 'clock', Agents: 'fork', Output: 'list', 'Where it shows': 'compass', More: 'sliders' }
 const KEY_INFO: Record<string, { group: (typeof GROUPS)[number]; help: string }> = {
   'Main session': { group: 'Session', help: 'Model you run on, e.g. opus·high' },
   'Session cap': { group: 'Session', help: 'Units before it stops to ask' },
@@ -40,6 +42,8 @@ const KEY_INFO: Record<string, { group: (typeof GROUPS)[number]; help: string }>
   'Agent budgets': { group: 'Agents', help: 'Per tier T1 to T4, under auto' },
   'Review gate': { group: 'Agents', help: 'Holds the receipt for reviewers' },
   Questions: { group: 'Agents', help: 'A Judge answers first' },
+  'Budget raise': { group: 'Agents', help: 'auto: +half the start budget, twice at most, then asks; ask: always asks' },
+  'Git guard': { group: 'Agents', help: 'warn or deny git writes outside the git agent; off' },
   Receipt: { group: 'Output', help: 'Receipt form; savings N = only past N%' },
   Guide: { group: 'Output', help: 'The next-step line' },
   Resume: { group: 'Output', help: 'What it covers; off = not in chat' },
@@ -176,7 +180,7 @@ const CONTROL = 16
 
 // One key as a settings row: the name (with "· edited" while unsaved) and its help on the left, the control on the right; the
 // custom value Input under it when open. The name is drawn beside the control, so the control itself carries no label.
-function field($: EngineInterface, ui: Ui, k: PaneOverrideKey, d: Draft) {
+function field($: EngineInterface, ui: Ui, look: Look, folds: Folds, k: PaneOverrideKey, d: Draft) {
   const { Box, Input, Select, Text } = ui
   const help = [KEY_INFO[k.key]?.help, WHERE[k.source]].filter(Boolean).join(' · ')
   const edited = isChanged(k, d)
@@ -209,7 +213,7 @@ function field($: EngineInterface, ui: Ui, k: PaneOverrideKey, d: Draft) {
             <Text>{k.key}</Text>
             {edited ? <Text color="warning">{' · edited'}</Text> : null}
           </Box>
-          {help ? <Text size="caption" dimColor>{help}</Text> : null}
+          {help ? longText($, ui, look, folds, `help:${k.key}`, help, { caption: true, dim: true, indent: CONTROL + 2, lines: 2 }) : null}
         </Box>
         <Box width={CONTROL} flexShrink={0} justifyContent="flex-end">
           {control}
@@ -253,7 +257,7 @@ function pageTop($: EngineInterface, ui: Ui, dirty: number) {
 }
 
 // The page the pane turns into: the target file, the groups of keys, the other forms, and Save / Ask Claude / Discard.
-export async function overridesPage($: EngineInterface, ui: Ui, p: Pane | null, folds: Folds) {
+export async function overridesPage($: EngineInterface, ui: Ui, p: Pane | null, folds: Folds, look: Look) {
   const { Box, Button, Input, Text } = ui
   const ov: PaneOverrides | null = p?.overrides ?? null
   if (p === null || ov === null) {
@@ -270,11 +274,12 @@ export async function overridesPage($: EngineInterface, ui: Ui, p: Pane | null, 
   const others = ov.raw.filter(r => r.source !== scope)
   const groups = GROUPS.map(name => ({ name, keys: ov.keys.filter(k => (KEY_INFO[k.key]?.group ?? 'More') === name) })).filter(g => g.keys.length > 0)
   const rawEdited = rawChanged(ov, d, scope)
-  const scopeButton = (value: Scope, label: string) => <Button key={`scope:${value}`} label={label} variant={scope === value ? 'primary' : 'secondary'} onPress={() => setScope($, value)} />
+  // both secondary, the chosen one marked ✓: Save stays the page's one primary
+  const scopeButton = (value: Scope, label: string) => <Button key={`scope:${value}`} label={scope === value ? `✓ ${label}` : label} variant="secondary" onPress={() => setScope($, value)} />
   return (
     <Box flexDirection="column" gap={1}>
       {pageTop($, ui, dirty)}
-      <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={2} paddingY={1} rowGap={1}>
+      <Box flexDirection="column" rowGap={1}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" columnGap={1} flexWrap="wrap">
           <Text>Save to</Text>
           <Box flexDirection="row" gap={1}>
@@ -284,21 +289,20 @@ export async function overridesPage($: EngineInterface, ui: Ui, p: Pane | null, 
         </Box>
         <Text size="caption" dimColor>{`${file} · the project file wins over yours`}</Text>
       </Box>
-      {groups.map(g => {
+      {sections(ui, look, [...groups.map(g => {
         const edited = g.keys.filter(k => isChanged(k, d)).length
         const set = g.keys.filter(k => WHERE[k.source]).length
         return card(
           $,
           ui,
-          { id: `g:${g.name}`, title: g.name, summary: edited > 0 ? `${edited} edited` : set > 0 ? `${set} set` : 'default', tone: edited > 0 ? 'warning' : undefined, folds },
-          <Box flexDirection="column" rowGap={1}>{g.keys.map(k => field($, ui, k, d))}</Box>,
+          { id: `g:${g.name}`, title: g.name, summary: edited > 0 ? `${edited} edited` : set > 0 ? `${set} set` : 'default', tone: edited > 0 ? 'warning' : undefined, folds, icon: GROUP_ICON[g.name], neutral: true, look },
+          <Box flexDirection="column" rowGap={1}>{g.keys.map(k => field($, ui, look, folds, k, d))}</Box>,
         )
-      })}
-      {card(
+      }), card(
         $,
         ui,
         // folded while this file has none of these lines: they are the rare, free-form overrides
-        { id: 'g:Other', title: 'Other overrides', summary: rawEdited ? 'edited' : raw.length > 0 ? `${raw.length} line${raw.length === 1 ? '' : 's'}` : others.length > 0 ? `${others.length} in ${WHERE[others[0].source] ?? others[0].source}` : null, tone: rawEdited ? 'warning' : undefined, folds, def: raw.length > 0 || rawEdited },
+        { id: 'g:Other', title: 'Other overrides', summary: rawEdited ? 'edited' : raw.length > 0 ? `${raw.length} line${raw.length === 1 ? '' : 's'}` : others.length > 0 ? `${others.length} in ${WHERE[others[0].source] ?? others[0].source}` : null, tone: rawEdited ? 'warning' : undefined, folds, icon: 'sliders', neutral: true, look, def: raw.length > 0 || rawEdited },
         <Box flexDirection="column" rowGap={1}>
           <Text size="caption" dimColor>One per line: topic tiers, cells, reviewers, workflows — e.g. Reviewers: Money = finance, tester</Text>
           <Input key="raw" rows={Math.min(8, Math.max(2, raw.length + 1))} placeholder="Topic: Billing = T3" value={d[RAW] ?? rawBase(ov, scope).join('\n')} onInput={v => setDraft($, RAW, v)} onSubmit={v => setDraft($, RAW, v)} />
@@ -306,15 +310,15 @@ export async function overridesPage($: EngineInterface, ui: Ui, p: Pane | null, 
             <Text size="caption" dimColor>{`${r.line} — in ${WHERE[r.source] ?? r.source}; switch Save to, to edit it`}</Text>
           ))}
         </Box>,
-      )}
-      <Box flexDirection="row" justifyContent="space-between" alignItems="center" columnGap={1} paddingX={1}>
+      )])}
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center" columnGap={1}>
         <Box flexDirection="row" flexWrap="wrap" gap={1}>
           {saving ? (
             <Button key="save" label="Saving…" variant="secondary" onPress={() => undefined} />
           ) : (
             <Button key="save" label={dirty > 0 ? `Save ${dirty} change${dirty === 1 ? '' : 's'}` : 'Save'} variant={dirty > 0 ? 'primary' : 'secondary'} onPress={() => save($, p, ov, d, file)} />
           )}
-          <Button key="ask" label="Ask Claude" variant="secondary" onPress={() => askClaude($, ov, d, file)} />
+          <Button key="ask" label="Ask Claude" plain dimColor onPress={() => askClaude($, ov, d, file)} />
         </Box>
         {dirty > 0 ? <Button key="reset" label="Discard" plain dimColor onPress={() => updatePaneDraft($, cur => (cur[SCOPE] ? { [SCOPE]: cur[SCOPE] } : {}))} /> : null}
       </Box>
@@ -329,12 +333,29 @@ async function openEditor($: EngineInterface, group?: string) {
 }
 
 // The short card on the pane's main page: a table of the values a file sets, the other lines, and Edit.
-export async function overridesCard($: EngineInterface, ui: Ui, p: Pane | null, folds: Folds) {
+export async function overridesCard($: EngineInterface, ui: Ui, p: Pane | null, folds: Folds, look: Look) {
   const { Box, Button, Text } = ui
   const ov: PaneOverrides | null = p?.overrides ?? null
-  if (p === null || ov === null) return card($, ui, { id: 'overrides', title: 'Overrides', folds }, <Text dimColor>{unreadable}</Text>)
+  const html = hasSvg(ui, look)
+  if (p === null || ov === null) {
+    if (html) return htmlSection(ui, look, { icon: 'sliders', tone: 'grey', title: 'Overrides' }, [emptyPic(ui, look, unreadable)])
+    return card($, ui, { id: 'overrides', title: 'Overrides', def: false, folds, icon: 'sliders', look }, <Text dimColor>{unreadable}</Text>)
+  }
   const { dirty } = await editorState($, p, ov)
   const set = ov.keys.filter(k => WHERE[k.source])
+  if (html) {
+    // the desktop: the keys set as one card (the key, its value and where it is set), Edit and the other lines as buttons under it
+    const note = set.length > 0 ? 'Everything else uses the defaults.' : 'Everything uses the defaults.'
+    const summary = dirty > 0 ? `${dirty} unsaved` : set.length > 0 ? `${set.length} set` : 'defaults'
+    const other = ov.raw.length > 0 ? `${ov.raw.length} other line${ov.raw.length === 1 ? '' : 's'} · tiers, reviewers` : null
+    return htmlSection(ui, look, { icon: 'sliders', tone: 'grey', title: 'Overrides', summary, summaryTone: dirty > 0 ? 'amber' : set.length > 0 ? 'blue' : null }, [
+      pic(ui, look, overridesBlock(set.map(k => ({ key: k.key, value: plain(k.value), where: WHERE[k.source] })), note), [...set.flatMap(k => [k.key, plain(k.value), WHERE[k.source]]), note]),
+      buttonRow(ui, [
+        <Button key="edit-overrides" label={glyph(look, GLYPH.edit, 'Edit')} variant="secondary" onPress={() => openEditor($)} />,
+        other ? <Button key="edit-other" label={glyph(look, GLYPH.other, other)} variant="secondary" onPress={() => openEditor($, 'g:Other')} /> : null,
+      ]),
+    ])
+  }
   const rows: JSX.Element[] = set.map(k => (
     <Box flexDirection="row" columnGap={1}>
       <Box flexGrow={1} flexShrink={1}>
@@ -350,7 +371,7 @@ export async function overridesCard($: EngineInterface, ui: Ui, p: Pane | null, 
   return card(
     $,
     ui,
-    { id: 'overrides', title: 'Overrides', summary, tone: dirty > 0 ? 'warning' : undefined, folds },
+    { id: 'overrides', title: 'Overrides', def: false, summary, tone: dirty > 0 ? 'warning' : set.length > 0 ? 'suggestion' : undefined, folds, icon: 'sliders', look },
     <Box flexDirection="column" rowGap={1}>
       {rows.length > 0 ? <Box flexDirection="column">{rows}</Box> : null}
       {ov.raw.length > 0 ? (
@@ -360,7 +381,7 @@ export async function overridesCard($: EngineInterface, ui: Ui, p: Pane | null, 
       ) : null}
       <Box flexDirection="row" justifyContent="space-between" alignItems="center" columnGap={1}>
         <Text size="caption" dimColor>{set.length > 0 ? 'Everything else uses the defaults.' : 'Everything uses the defaults.'}</Text>
-        <Button key="edit-overrides" label="Edit" variant="secondary" onPress={() => openEditor($)} />
+        <Button key="edit-overrides" label="Edit" plain dimColor onPress={() => openEditor($)} />
       </Box>
     </Box>,
   )

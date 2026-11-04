@@ -13,7 +13,8 @@ export type Guide = {
   root: string
   items: GuideItem[]
   ctx: { tokens: number; mark: number | null } | null // mark in K tokens; null: past the last mark
-  task: { spawns: number; usd: number; budget: number | null; left: number | null } | null
+  task: { spawns: number; usd: number; budget: number | null; left: number | null; raised?: number } | null // raised: automatic agent-budget raises this task
+  all?: { n: number; fill: string } | null // 2+ items open: what Check all puts in the prompt box; absent in older state files
   main: string | null // "suggest Opus 5.5 · Medium (now Fable 5.1 · Medium)"; null when the main session fits
   // Claude's last resolve, kept by the hook until the Stop of the turn after it; null when nothing. Undo runs `unresolve` (cwd = root).
   last_resolved: { text: string; unresolve: string[]; ts: number } | null
@@ -35,8 +36,13 @@ export type PaneResume = {
   next: string[]
   needs: { n: number | null; text: string }[] // the open decisions, numbered as the memo numbers them
   needs_open: number
+  needs_fill?: string | null // 2+ Needs-you items open: the combined text Check all puts in the prompt box
   last: string[]
 }
+
+export type PaneDecision = { ts: string; q: string; a: string; sid: string } // ts: "MM-DD HH:MM"; a judge q may start with "judge: "
+
+export type PaneDecisions = { you: PaneDecision[]; judge: PaneDecision[]; n_you: number; n_judge: number } // newest first, at most 50 per group
 
 export type PaneLive = { side: string; model: string; effort: string; description: string; ts: number | null } // ts: epoch seconds
 
@@ -81,6 +87,7 @@ export type Pane = {
   resume: PaneResume | null // null: no memo yet
   spawns: PaneSpawns
   overrides: PaneOverrides | null
+  decisions?: PaneDecisions | null // absent in older state files: no Decisions card
   cmd: { overrides: string[] | null } // argv prefix of the script the overrides editor runs
 }
 
@@ -97,7 +104,10 @@ declare module 'claude-code' {
     // `paneAuto`: true once this session tried the unasked open (once per session).
     // `paneDraft`: unsaved values of the overrides editor, by override key (+ '@scope', '@raw', '@custom:<key>').
     // `paneSaving`: true while the editor's Save runs its command.
-    // `paneView`: the page the pane shows: 'main' (the cards) or 'overrides' (the editor).
+    // `paneView`: the page the pane shows: 'main' (the cards), 'overrides' (the editor) or 'detail' (the full text of one card).
+    // `paneDetail`: which card the detail page shows: 'guide', 'resume', 'spawns', 'decisions' or 'receipt:<n>'.
+    // `paneTab`: the page the desktop's nav bar shows ('home', 'guide', 'resume', 'decisions', 'spawns', 'overrides').
+    // `paneNavTs`: when the person last moved to a page (ms): its cards slide in for a moment after.
     // `paneFolds`: open (true) or folded (false) by id: a card, an editor group (`g:<name>`), a long list (`more:<id>`); also in $.store.
     'abofles-guide': {
       guide: Guide | null
@@ -110,7 +120,10 @@ declare module 'claude-code' {
       paneAuto: boolean
       paneDraft: Record<string, string>
       paneSaving: boolean
-      paneView: 'main' | 'overrides'
+      paneView: 'main' | 'overrides' | 'detail'
+      paneDetail: string | null
+      paneTab: string
+      paneNavTs: number
       paneFolds: Record<string, boolean>
     }
   }

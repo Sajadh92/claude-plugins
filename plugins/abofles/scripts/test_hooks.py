@@ -14,6 +14,11 @@ from pathlib import Path
 HOOK = Path(__file__).resolve().parent.parent / "hooks" / "abofles_hook.py"
 
 
+import importlib.util as _ilu
+_hs = _ilu.spec_from_file_location("abofles_hook_t", str(Path(__file__).resolve().parent.parent / "hooks" / "abofles_hook.py"))
+_H = _ilu.module_from_spec(_hs)
+_hs.loader.exec_module(_H)
+
 def run(mode, payload, ledger):
     env = dict(os.environ, ABOFLES_LEDGER_DIR=ledger)
     if "cwd" not in payload and os.environ.get("ABOFLES_TEST_CWD"):
@@ -60,7 +65,7 @@ def main():
         import importlib.util as _iu0
         _hs0 = _iu0.spec_from_file_location("abofles_hook_t0", str(HOOK)); _H0 = _iu0.module_from_spec(_hs0); _hs0.loader.exec_module(_H0)
         H_flat = _H0.explain_flat
-        allowed = lambda out: out is None or (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "allow"  # the first spawn of a task may carry the `main:` line
+        allowed = lambda out: out is None or (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") != "deny"  # a spawn note is context only (no permissionDecision); the first spawn of a task may carry the `main:` line
         ctx = lambda out: (out or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
         # post output minus the receipt note it always carries
         import re as _re
@@ -72,7 +77,7 @@ def main():
         check("pre: bad effort blocked", "effort=ultra" in reason(run("pre", agent("opus", "ultra"), led)))
         check("pre: fable on reader blocked", "fable is only for" in reason(run("pre", agent("fable", "medium"), led)))
         _fa = run("pre", agent("fable", "medium", "abofles:abofles-analyst"), led)
-        check("pre: fable on analyst allowed (an advisory cell note at most)", _fa is None or (_fa.get("hookSpecificOutput", {}).get("permissionDecision") == "allow" and "× the cell" in ctx(_fa)))
+        check("pre: fable on analyst allowed (an advisory cell note at most)", _fa is None or ("permissionDecision" not in json.dumps(_fa) and "× the cell" in ctx(_fa)))
         check("pre: good call allowed", run("pre", agent("haiku", "low"), led) is None)
         check("pre: skip bypass", run("pre", agent(prompt="abofles:skip x", stype="Explore"), led) is None)
         check("pre: non-Agent tool ignored", run("pre", {"tool_name": "Bash", "tool_input": {}}, led) is None)
@@ -167,7 +172,8 @@ def main():
         check("guard: no session marker -> silent", g("nosession") is None)
         run("start", {"session_id": "test", "cwd": cwd}, led)
         r1, r2, r3, r4 = g(), g(), g(), g()
-        check("guard: 3 silent, 4th warns", r1 is None and r3 is None and "direct reads in a row" in (r4 or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", ""))
+        check("guard: 3 silent, 4th warns", r1 is None and r3 is None and "direct reads in a row" in (r4 or {}).get("hookSpecificOutput", {}).get("additionalContext", ""))
+        check("guard: the warning is context only — no permissionDecision, so the user's permission prompt stays", "permissionDecision" not in json.dumps(r4 or {}))
         check("guard: warning reaches the model (additionalContext)", "direct reads in a row" in ctx(r4))
         check("guard: 5th silent (warned once per threshold)", g() is None)
         gb = lambda cmd: run("guard", {"session_id": "test", "cwd": cwd, "tool_name": "Bash", "tool_input": {"command": cmd}}, led)
@@ -253,9 +259,12 @@ def main():
         _bgout = run("post", dict(agent("haiku", "low", resp={"status": "async_launched", "agentId": "bg1", "prompt": "p", "description": "t"}, cwd=cwd), session_id="bg"), led)
         check("receipt: a background launch carries no receipt note", "Receipt at task end" not in ctx(_bgout))
         check("receipt: background spawn running -> no block", run("receipt", {"session_id": "bg", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "waiting"}, led) is None)
+        _syncout = run("post", dict(agent("haiku", "low", resp="STATUS: done\nCONFIDENCE: high\nFACTS:\n- none found: y\nGAPS: none", cwd=cwd), session_id="bg"), led)
+        check("receipt: a sync spawn while a background spawn of the task still runs carries no receipt note", "Receipt at task end" not in ctx(_syncout))
+        check("receipt: ... and the Stop after it asks for no receipt either", run("receipt", {"session_id": "bg", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "waiting"}, led) is None)
         run("stop", {"session_id": "bg", "agent_id": "bg1", "last_assistant_message": "STATUS: done\nCONFIDENCE: high\nFACTS:\n- none found: x\nGAPS: none"}, led)
         out = run("receipt", {"session_id": "bg", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "all back"}, led)
-        check("receipt: background done -> receipt due", (out or {}).get("decision") == "block" and "🧾 **1 Spawn" in out.get("reason", ""))
+        check("receipt: background done -> receipt due", (out or {}).get("decision") == "block" and "🧾 **2 Spawns" in out.get("reason", ""))
         tr = Path(cwd, 'main-tk.jsonl')
         # real tokens + dollars from the subagent transcripts (sync via PostToolUse, background via SubagentStop)
         def sub_tr(sid, aid, model, n_in, n_cw, n_cr, n_out, calls=2):
@@ -455,7 +464,10 @@ def main():
         run("post", dict(p1, tool_response=good), led)
         out = run("pre", p1, led)
         check("gate: spawn 3 denied (budget 2)", "agent budget is 2" in reason(out) and "2 already ran" in reason(out) and "no Judge" in reason(out))
-        bq = {"session_id": "ag", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Raise the agent budget to 4?", "options": []}]}}
+        check("gate: the budget deny names the words the question must carry", "Abo Fles agent budget" in reason(out))
+        bq = {"session_id": "ag", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Abo Fles agent budget: raise it to 4?", "options": []}]}}
+        bq0 = dict(bq, tool_input={"questions": [{"question": "Raise the agent budget to 4?", "options": []}]})
+        check("gate: a budget-ish question without the phrase still needs a Judge (and keeps the window)", "Judge" in reason(run("qgate", bq0, led)))
         check("gate: budget question after the deny needs no Judge", run("qgate", bq, led) is None)
         bq2 = dict(bq, tool_input={"questions": [{"question": "Should the refund round half up?", "options": []}]})
         check("gate: only one question per deny", "Judge" in reason(run("qgate", bq2, led)))
@@ -465,12 +477,14 @@ def main():
         check("gate: next task asks again after a per-task answer", "agent gate first" in reason(run("pre", p1, led)))
         out = run("decision", dict(gq, tool_response={"answers": {gq["tool_input"]["questions"][0]["question"]: "Auto (recommended)"}}), led)
         check("gate: Auto recorded", "agents: auto" in ctx(out))
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Budget raise = ask\n")  # these checks pin the deny at the budget; the auto raise has its own tests
         p4 = dict(agent("opus", "high", "abofles:abofles-worker", prompt="abofles: Payments & Gateway Integration / Work · T4\nq\nLine cap: 40", cwd=cwd), session_id="ag")
         for _ in range(12):
             check("gate: auto T4 orchestrator allows 12", allowed(run("pre", p4, led)))
             run("post", dict(p4, tool_response="STATUS: done\nCONFIDENCE: high\nCHANGED:\n- src/a.cs — x\nRAN: none\nLEFT: none"), led)
         check("gate: auto T4 denies the 13th", "agent budget is 12 (auto · 🔴 Critical · orchestrator)" in reason(run("pre", p4, led)))
         run("receipt", {"session_id": "ag", "cwd": cwd, "stop_hook_active": True, "last_assistant_message": "🧾 **8 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y"}, led)  # second Stop: the review gate's one refusal is spent
+        Path(cwd, "CLAUDE.md").unlink()
         check("gate: auto survives the task end, no question", allowed(run("pre", p1, led)))
         # parallel cap on background spawns (budget off so only the cap applies)
         Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Agents = off\n")
@@ -489,7 +503,7 @@ def main():
         check("gate: Agents = 1 -> second denied", "agent budget is 1 (Agents = 1)" in reason(run("pre", p2, led)))
         Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Agents = off\n")
         check("gate: Agents = off -> unlimited", run("pre", p2, led) is None)
-        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Agents = auto\n- Agent budgets = 1, 1, 1, 1\n")
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Agents = auto\n- Agent budgets = 1, 1, 1, 1\n- Budget raise = ask\n")
         check("gate: Agent budgets override -> T2 budget 1 reached", "agent budget is 1 (auto · 🟡 Normal" in reason(run("pre", p2, led)))
         Path(cwd, "CLAUDE.md").unlink()
         # agents.py set
@@ -507,16 +521,46 @@ def main():
         aq = {"session_id": "qg", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Cap in IQD only?", "options": []}]}}
         out = run("qgate", aq, led)
         check("qgate: unjudged question denied with the route table", reason(out).startswith("Abo Fles (ابو فليس): question gate") and "🔴 Critical Opus 5.5 · Medium → Opus 5.5 · High" in reason(out) and "🟡 Normal Sonnet 5.5 · Medium (judges and explains)" in reason(out))
-        check("qgate: the agent gate question is exempt", run("qgate", dict(aq, tool_input={"questions": [{"question": "Abo Fles agent gate: how many?", "options": []}]}), led) is None)
+        gq_ = dict(aq, tool_input={"questions": [{"question": "Abo Fles agent gate: how many?", "options": [{"label": "Auto (recommended)"}, {"label": "This task: 3 agents"}, {"label": "Main session only"}]}]})
+        check("qgate: the agent gate question is denied once the gate is answered (the session has `auto`)", "question gate" in reason(run("qgate", gq_, led)))
+        json.dump(dict(json.loads(Path(state, "qg.json").read_text()), gate=None), open(Path(state, "qg.json"), "w"))
+        check("qgate: the agent gate question is exempt while the gate is unanswered or reset", run("qgate", gq_, led) is None)
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Agents = auto\n")
+        json.dump(dict(json.loads(Path(state, "qg.json").read_text()), asked=[]), open(Path(state, "qg.json"), "w"))  # not a re-ask of the round above
+        check("qgate: ... but not when Agents = auto (there is no gate to answer)", "question gate" in reason(run("qgate", gq_, led)))
+        Path(cwd, "CLAUDE.md").unlink()
+        json.dump(dict(json.loads(Path(state, "qg.json").read_text()), gate="auto"), open(Path(state, "qg.json"), "w"))
         jp = lambda tier, resp: dict(agent("sonnet", "medium", "abofles:abofles-judge", prompt=f"abofles: Pricing, Fees, Commission & Tax / Judge · T{tier}\nq\nLine cap: 40", resp=resp, cwd=cwd), session_id="qg", transcript_path=str(tr))
         ask = "STATUS: done\nCONFIDENCE: high\nVERDICT: ASK\nQUESTION: Should the cap apply per unit or per order?\nEVIDENCE:\n- src/a.cs:10 — cap read here\nWHY: per order lets a 10-unit order pass uncapped\nOPTIONS:\n- Per unit — means: x · then: y · pick when: z\nRECOMMEND: Per unit — matches the Jira AC"
         check("qgate: judge spawn is allowed with budget 0 (exempt)", run("pre", dict(jp(2, None), tool_input=dict(jp(2, None)["tool_input"])), led) is None)
         out = run("post", dict(jp(2, ask), tool_input=dict(jp(2, ask)["tool_input"], name="judge-q")), led)  # spawned with a name: SendMessage `to` can use it
         check("qgate: judge ASK unlocks and instructs", "question judged" in ctx(out) and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 1)
+        st_b = json.loads(Path(state, "qg.json").read_text())
+        run("post", dict(jp(2, ask), agent_id="sub-1", agent_type="abofles:abofles-worker"), led)
+        st_a = json.loads(Path(state, "qg.json").read_text())
+        check("post: a spawn made inside a subagent changes no judge_ok / spawn / task counter", all(st_a.get(k) == st_b.get(k) for k in ("judge_ok", "spawns", "task_judges", "inflight", "task_units")))
         check("qgate: judged question allowed once", run("qgate", aq, led) is None and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 0)
-        check("qgate: the same round again (reworded) passes without a second judge", run("qgate", dict(aq, tool_input={"questions": [{"question": "Should the cap be in IQD only, or per currency?", "options": []}]}), led) is None)
+        check("qgate: the same round again (reworded) passes without a second judge", run("qgate", dict(aq, tool_input={"questions": [{"question": "Is the cap in IQD only?", "options": []}]}), led) is None)
+        check("qgate: a judged question carrying a new ask is no re-ask (similar both ways) -> denied", "question gate" in reason(run("qgate", dict(aq, tool_input={"questions": [{"question": "Cap in IQD only, and also drop the refunds table today?", "options": []}]}), led)))
+        _qx = lambda q, opts=(), header=None: dict(aq, tool_input={"questions": [dict({"question": q, "options": [dict(o) for o in opts]}, **({"header": header} if header else {}))]})
+        check("qgate: a new ask after the judged question's `?` is no re-ask -> denied", "question gate" in reason(run("qgate", _qx("Cap in IQD only? Also I will drop the production users table now, OK?"), led)))
+        check("qgate: a new ask riding in an option is no re-ask -> denied", "question gate" in reason(run("qgate", _qx("Cap in IQD only?", [{"label": "Yes and force-push main"}, {"label": "No"}]), led)))
+        check("qgate: a new ask riding in the header is no re-ask -> denied", "question gate" in reason(run("qgate", _qx("Cap in IQD only?", header="Deploy prod tonight"), led)))
+        check("qgate: the gate mark carrying a second ask is not the gate question", not _H.is_gate_question([{"question": "Abo Fles agent gate: how many? And delete prod?", "options": [{"label": "Auto (recommended)"}]}])
+              and not _H.is_gate_question([{"question": "Abo Fles agent gate: how many?", "options": [{"label": "Auto (recommended)", "description": "and may I deploy?"}]}])
+              and _H.is_gate_question([{"question": "Abo Fles agent gate — this task looks Sensitive: how many agents?", "options": [{"label": "Auto (recommended)", "description": "sized by tier"}, {"label": "This task: 5 agents"}, {"label": "Main session only"}]}]))
+        check("qgate: the budget question carrying another ask in its header or a description is not the budget question",
+              not _H.budget_question([{"question": "Abo Fles agent budget — raise it?", "header": "Deploy prod", "options": [{"label": "Raise"}]}])
+              and not _H.budget_question([{"question": "Abo Fles agent budget — raise it?", "options": [{"label": "Raise", "description": "also drops the users table"}]}])
+              and _H.budget_question([{"question": "Abo Fles agent budget — raise it?", "options": [{"label": "Raise by 2", "description": "two more agents"}, {"label": "Stop"}]}]))
         aq2 = dict(aq, tool_input={"questions": [{"question": "Which branch do we merge into first?", "options": []}]})
-        check("qgate: a different question right after passes (re-ask window: translations share no words)", run("qgate", aq2, led) is None)
+        check("qgate: a different question right after the ask needs a Judge (the window exempts only the denied text)", "question gate" in reason(run("qgate", aq2, led)))
+        st_ = json.loads(Path(state, "qg.json").read_text())
+        check("qgate: the deny stores a hash of the question set it refused", bool(st_.get("denied_qhash")) and "last_ask_qhash" not in st_)
+        aq3 = dict(aq, tool_input={"questions": [{"question": "Ship the refund screen today?", "options": []}]})
+        check("qgate: within the window a third, different question is denied too (only the denied set is exempt)", "question gate" in reason(run("qgate", aq3, led)))
+        check("qgate: ... and exactly that denied set asked again within the window is denied too (never exempt unjudged)", "question gate" in reason(run("qgate", aq3, led)) and run("qgate", aq3, led) is not None)
+        check("qgate: the very same text as the judged question asked again passes (same round)", run("qgate", aq, led) is None)
         json.dump(dict(json.loads(Path(state, "qg.json").read_text()), last_ask_ts=0), open(Path(state, "qg.json"), "w"))
         aq2 = dict(aq, tool_input={"questions": [{"question": "Should refunds go to the wallet or the card?", "options": []}]})
         check("qgate: a different question later is denied again", "question gate" in reason(run("qgate", aq2, led)))
@@ -524,11 +568,19 @@ def main():
         # SendMessage to a gate agent unlocks one question
         check("qgate: SendMessage to a non-gate agent does nothing", run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "worker-7", "message": "m"}}, led) is None)
         check("qgate: SendMessage to the agent TYPE name unlocks nothing (an id or the spawn name is needed)", run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "abofles-judge", "message": "m"}}, led) is None)
-        out = run("sendmsg", {"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "judge-q", "message": "reword in Arabic"}}, led)
-        check("qgate: SendMessage to a gate agent this session spawned unlocks", "unlocked" in ctx(out) and run("qgate", aq2, led) is None)
+        smq = lambda resp="absent": run("sendmsg", dict({"session_id": "qg", "cwd": cwd, "tool_name": "SendMessage", "tool_input": {"to": "judge-q", "message": "reword in Arabic"}}, **({} if resp == "absent" else {"tool_response": resp})), led)
+        check("qgate: a failed SendMessage to a gate agent unlocks nothing (no reply coming)", all(smq({"success": False, "error": "no such agent"}) is None for _ in range(3))
+              and json.loads(Path(state, "qg.json").read_text()).get("judge_ok", 0) == 0)
+        out = smq({"success": True, "message": "Resuming", "resumedAgentId": "judge-q"})
+        check("qgate: SendMessage to a gate agent this session spawned, with a reply id, unlocks", "unlocked" in ctx(out) and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 1)
+        check("qgate: a second SendMessage before that reply lands adds no unlock (one per reply), nor one with no reply id", smq({"success": True, "resumedAgentId": "judge-q"}) is None and smq() is None and smq("ok") is None
+              and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 1)
+        check("qgate: ... and the unlock lets the question through", run("qgate", aq2, led) is None)
+        check("qgate: a spent Judge unlock clears the denied set (it is never exempt on its own later)", "denied_qhash" not in json.loads(Path(state, "qg.json").read_text()))
         ans = "STATUS: done\nCONFIDENCE: high\nVERDICT: ANSWERED\nQUESTION: Is the cap per unit?\nANSWER: Yes, per unit\nEVIDENCE:\n- src/a.cs:12 — cap applied inside the unit loop"
         out = run("post", jp(2, ans), led)
         check("qgate: T2 ANSWERED -> decision logged, no needs-you, no unlock", "judge ANSWERED from evidence" in ctx(out) and "judge: Is the cap per unit? → Yes, per unit (src/a.cs:12" in sf("qg").read_text() and "judge decided" not in mf.read_text() and json.loads(Path(state, "qg.json").read_text()).get("judge_ok") == 0)
+        check("qgate: ... and the logged line is marked by:judge (parse_decision: by judge, the `judge: ` prefix kept on the question)", " · by:judge · judge: Is the cap per unit? → Yes, per unit" in sf("qg").read_text())
         out = run("post", jp(4, ans), led)
         check("qgate: T4 ANSWERED -> also in Needs you", "judge decided (🔴 Critical): Is the cap per unit? → Yes, per unit — check" in mf.read_text())
         hand = "STATUS: done\nCONFIDENCE: medium\nVERDICT: HANDOFF\nQUESTION: Per unit or per order?\nEVIDENCE:\n- src/a.cs:10 — cap read here\nWHY: money"
@@ -572,9 +624,22 @@ def main():
         # 3. an answered question ticks the Needs-you item that raised it
         run("receipt", {"session_id": "rt", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y\n- `open` → owner decision: should the surcharge round up or down?"}, led)
         check("needs: item added", "surcharge round up or down" in mf.read_text().split("## Needs you")[1].split("## Decisions")[0])
-        run("decision", {"session_id": "rt", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Should the surcharge round up or down?", "options": []}]}, "tool_response": {"answers": {"Should the surcharge round up or down?": "Down"}}}, led)
+        import importlib.util as _iup
+        _hp = _iup.spec_from_file_location("abofles_hook_pick", str(HOOK)); _HP = _iup.module_from_spec(_hp); _hp.loader.exec_module(_HP); H_pick = _HP.picked_option
+        sq_ = "Should the surcharge round up or down?"
+        sopts_ = [{"label": "Round up", "description": "a"}, {"label": "Round down", "description": "b"}]
+        run("decision", {"session_id": "rt", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": sq_, "options": sopts_}]}, "tool_response": {"answers": {sq_: "No, neither — ask me again after the finance call (it may be per currency)"}}}, led)
         line = next(l for l in mf.read_text().splitlines() if "surcharge round up or down" in l and l[0].isdigit())
-        check("needs: answered item ticked", "[x]" in line and "answered" in line)
+        check("needs: a free-text answer (a refusal) leaves the item open and notes the answer, first 80 chars, before the origin tag",
+              "[ ]" in line and " · answered (free text): No, neither — ask me again after the finance call it may be per currency" in line and "→ resolved" not in line and line.rstrip().endswith(")") and "(s:rt p:" in line)
+        run("decision", {"session_id": "rt", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": sq_, "options": sopts_}]}, "tool_response": {"answers": {sq_: "still thinking"}}}, led)
+        line = next(l for l in mf.read_text().splitlines() if "surcharge round up or down" in l and l[0].isdigit())
+        check("needs: a second free-text answer replaces the note (one note per item)", line.count("answered (free text)") == 1 and "still thinking" in line and "[ ]" in line)
+        run("decision", {"session_id": "rt", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": sq_, "options": sopts_}]}, "tool_response": {"answers": {sq_: "Round down"}}}, led)
+        line = next(l for l in mf.read_text().splitlines() if "surcharge round up or down" in l and l[0].isdigit())
+        check("needs: answered with an offered option label -> item ticked", "[x]" in line and "answered" in line)
+        check("needs: picked_option — equal or starts with a label (multi-select), case and spacing ignored; free text is not one",
+              H_pick("Round  DOWN", sopts_) and H_pick("Round up, Round down", sopts_) and not H_pick("down", sopts_) and not H_pick("No", sopts_) and not H_pick("Yes", []))
         run("receipt", {"session_id": "rt", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **1 Spawn · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y\n- `open` → owner decision: should the surcharge round up, or down?"}, led)
         check("needs: near-duplicate not added again", mf.read_text().split("## Needs you")[1].split("## Decisions")[0].count("surcharge round up") == 1)
         # 4. resume block: every Left line, Now age, receipts after the Now section
@@ -606,7 +671,9 @@ def main():
         json.dump(dict(json.loads(Path(state, "bb.json").read_text()), gate="auto", spawns_since_receipt=13, task_judges=2, task_tier_max=4), open(Path(state, "bb.json"), "w"))
         p4 = dict(agent("haiku", "low", prompt="abofles: Payments & Gateway Integration / Read · T4\nq\nLine cap: 40", cwd=cwd), session_id="bb")
         check("budget: 11 work spawns of 12 + inflight -> 12th allowed", run("pre", p4, led) is None)
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Budget raise = ask\n")
         check("budget: 13th denied", "agent budget is 12" in reason(run("pre", p4, led)))
+        Path(cwd, "CLAUDE.md").unlink()
         run("decision", {"session_id": "bb", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Abo Fles agent gate: how many?", "options": []}]}, "tool_response": {"answers": {"Abo Fles agent gate: how many?": "Auto (recommended)"}}}, led)
         json.dump(dict(json.loads(Path(state, "bb.json").read_text()), inflight=0), open(Path(state, "bb.json"), "w"))
         check("budget: answering Auto again releases a stuck budget", run("pre", p4, led) is None)
@@ -761,7 +828,7 @@ def main():
         memo("now", inp="Task      A: cap ticket\nNext      A: verify cap\n")
         txt = mf.read_text()
         check("multi: one file per session, both indexed in the main memo", "- [msA](abofles-memo.d/msA.md)" in txt and "- [msB](abofles-memo.d/msB.md)" in txt and "task: A: cap ticket" in txt and "task: B: docs ticket" in txt and "A: cap ticket" in sf("msA").read_text() and "B: docs ticket" in sf("msB").read_text())
-        check("multi: each session's receipts in its own file; Needs-you items carry the session tag", "session A built the cap" in sf("msA").read_text() and "session A built" not in sf("msB").read_text() and "session B wrote the docs" in sf("msB").read_text() and "(s:msA)" in txt)
+        check("multi: each session's receipts in its own file; Needs-you items carry the session tag", "session A built the cap" in sf("msA").read_text() and "session A built" not in sf("msB").read_text() and "session B wrote the docs" in sf("msB").read_text() and "(s:msA p:" in txt)
         blkA = memo("show")
         check("multi: resume shows this session's Now and receipts only", "session msA" in blkA.splitlines()[0] and "- `now` → A: cap ticket" in blkA and "B: docs" not in blkA.split("- `last`")[0] and "session A built the cap" in blkA and "session B wrote the docs" not in blkA)
         pin("msB")
@@ -826,7 +893,8 @@ def main():
         _sp.run(ES_UN + ["--trace"], cwd=cwd, capture_output=True, text=True, env=genv)
         check("trace: --unresolve --trace writes reopened by hand", "· reopened by hand: escalate · Unit Test" in sf("gu").read_text())
         _sp.run(ES_UN, cwd=cwd, capture_output=True, text=True, env=genv)
-        out = run("receipt", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "🧾 **3 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y\n- `open` → owner decision: cap per currency?"}, led)
+        out = run("receipt", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "stop_hook_active": False, "last_assistant_message": "🧾 **3 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y\n- `open` → owner decision: round refunds half up or down?"}, led)
+        _H0.memo_needs(cwd, "gu", "owner decision: archive closed accounts after 90 days?")  # gu's own item (the receipt's one was deduplicated against another session's)
         run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "source": "resume"}, led)
         blk = run("start", {"session_id": "gu", "cwd": cwd, "transcript_path": str(tr), "source": "resume"}, led)
         check("guide: resume block carries the guide line, owner decision first after the task closed", "- `guide` → 🧭 🟠 " in blk and "owner decision" in blk)
@@ -835,9 +903,9 @@ def main():
         check("guide: CLI --all lists the ladder", gout.startswith("🟠 ") and "owner decision" in gout)
         od = ((json.loads(Path(state, "gu.json").read_text()).get("guide") or {}).get("items") or [{}])[0]
         check("guide: an owner decision item asks the user after judging; no resolve argv, a recheck with the traced memo.py command and AskUserQuestion",
-              od.get("p") == "🟠" and od.get("fill", "").startswith("abofles: owner decision 1 is open: ") and od["fill"].endswith("Judge it first, then ask me with AskUserQuestion.")
+              od.get("p") == "🟠" and re.match(r"abofles: owner decision \d+ is open: ", od.get("fill", "")) and "(from session gu" in od["fill"] and od["fill"].endswith("Judge it first, then ask me with AskUserQuestion.")
               and od.get("resolve") is None and od.get("unresolve") is None
-              and all(x in (od.get("recheck") or "") for x in ("resolve 1 --session gu", "memo.py", "re-checked: <evidence>", "--trace \"user answered: <answer>\"", "AskUserQuestion", "Re-check it first")))
+              and all(x in (od.get("recheck") or "") for x in (f"resolve {od['id'].split(':')[1]} --session gu", "memo.py", "re-checked: <evidence>", "--trace \"user answered: <answer>\"", "AskUserQuestion", "Re-check it first")))
         MEMOPY = str(Path(__file__).resolve().parent / "memo.py")
         OD_RES = [sys.executable, "-X", "utf8", MEMOPY, "resolve", "1", "settled in the test", "--trace", "--session", "gu"]
         OD_UN = [sys.executable, "-X", "utf8", MEMOPY, "reopen", "1", "--trace", "--session", "gu"]
@@ -1315,6 +1383,17 @@ def main():
         run("prompt", {"session_id": "ba3", "cwd": cwd, "transcript_path": str(tr)}, led)
         nrow = next(r for r in ledrows("ba3") if r.get("agent_id") == "nr1")
         check("stop: no reply text -> row closed how=no_reply, and the guide raises no escalate item for it", nrow.get("how") == "no_reply" and nrow.get("completed_ts") and gitems("ba3") and not any(i["p"] == "🟡" for i in gitems("ba3")))
+        # SubagentStop before the hand-back reaches the transcript: the row stays pending, the next sweep grades the hand-back
+        gtr4 = Path(gdir, "agent-hb1.jsonl"); gtr4.write_text(gline("thinking out loud"))
+        run("post", dict(agent("haiku", "low", resp=launch_("hb1"), cwd=cwd), session_id="ba3"), led)
+        run("stop", {"session_id": "ba3", "agent_id": "hb1", "agent_transcript_path": str(gtr4), "last_assistant_message": ""}, led)
+        hrow = next(r for r in ledrows("ba3") if r.get("agent_id") == "hb1")
+        check("stop: no reply yet but the agent transcript exists -> row stays pending", hrow.get("status") == "pending")
+        with open(gtr4, "a") as fh:
+            fh.write(json.dumps({"type": "assistant", "message": {"id": "hb", "content": [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": REAL}}]}}) + "\n")
+        run("prompt", {"session_id": "ba3", "cwd": cwd, "transcript_path": str(tr)}, led)
+        hrow = next(r for r in ledrows("ba3") if r.get("agent_id") == "hb1")
+        check("sweep: a hand-back that landed after SubagentStop closes the row from it", hrow.get("status") == "done" and hrow.get("confidence") == "high")
         # 3. every judge block counts; a stub or an empty EXPLAIN never unlocks
         two = "STATUS: done\nCONFIDENCE: high\nVERDICT: ANSWERED\nQUESTION: Is the cap per unit?\nANSWER: Yes\nEVIDENCE:\n- src/a.cs:12 — loop\nVERDICT: ASK\nQUESTION: Per unit or per order?\nEVIDENCE:\n- src/a.cs:10 — cap read here\nWHY: w\nOPTIONS:\n- A — means: m · then: t · pick when: p\nRECOMMEND: A — r"
         run("post", jpa("ba4", two), led)
@@ -1334,6 +1413,32 @@ def main():
         check("gate reply: an explainer with a QUESTION but no EXPLAIN unlocks (EXPLAIN is optional)", gstate("ba7").get("judge_ok") == 2 and "stays locked" not in ctx(out))
         out = run("post", jpa("ba7", "Understood, I will explain it.", "abofles:abofles-explainer", "Explain", 3), led)
         check("gate reply: an explainer stub with no QUESTION line stays locked and warns", gstate("ba7").get("judge_ok") == 2 and "no QUESTION line" in ctx(out))
+        # numbered / tagged explainer questions; a HANDOFF judge then such an explainer; a background stub is surfaced later
+        for sx_ in ("bq1", "bq2", "bq3", "bq4"):
+            run("start", {"session_id": sx_, "cwd": cwd, "transcript_path": str(tr)}, led)
+            setst(sx_, gate="auto")
+        numq = ("STATUS: done\nCONFIDENCE: high\nQUESTION 1 [IDMS file]: How should the reader read the file?\nWHY: w\nOPTIONS:\n- A — means: m · then: t · pick when: p\nRECOMMEND: A — r\n"
+                "QUESTION 2: Who reviews it?\nWHY: w2\nOPTIONS:\n- B — means: m · then: t · pick when: p\nRECOMMEND: B — r")
+        out = run("post", jpa("bq1", numq, "abofles:abofles-explainer", "Explain", 4), led)
+        check("gate reply: an explainer with `QUESTION 1 [tag]:` and `QUESTION 2:` unlocks one question each, no stub warning", gstate("bq1").get("judge_ok") == 2 and "no QUESTION line" not in ctx(out))
+        check("judge_fields / explainer_blocks: numbered, tagged and bold QUESTION lines parse; QUESTIONS: does not",
+              H.judge_fields("QUESTION 3: x?")[1] == "x?" and H.judge_fields("**QUESTION:** y?")[1] == "y?" and H.judge_fields("QUESTIONS: no")[1] == ""
+              and [b[1] for b in H.explainer_blocks(numq)] == ["How should the reader read the file?", "Who reviews it?"] and len(H.explainer_blocks("Understood.")) == 1)
+        hand_ = "STATUS: done\nCONFIDENCE: medium\nVERDICT: HANDOFF\nQUESTION: How should the reader read the IDMS file?\nEVIDENCE:\n- a.cs:1 — x\nWHY: money"
+        out = run("post", jpa("bq2", hand_, tier=4), led)
+        check("gate: a HANDOFF judge unlocks nothing", gstate("bq2").get("judge_ok", 0) == 0 and "spawn `abofles:abofles-explainer`" in ctx(out))
+        run("post", jpa("bq2", numq.split("\nQUESTION 2")[0], "abofles:abofles-explainer", "Explain", 4), led)
+        check("gate: ... then an explainer with a tagged `QUESTION 1 [..]:` line for it -> the ask goes through", run("qgate", askp("bq2"), led) is None)
+        run("post", jpa("bq3", launch_("bx3"), "abofles:abofles-explainer", "Explain", 4), led)
+        run("stop", {"session_id": "bq3", "agent_id": "bx3", "last_assistant_message": "Understood, I will explain it."}, led)
+        check("background stub: SubagentStop prints nothing and keeps the warning for the main session", "no QUESTION line" in (gstate("bq3").get("gate_note") or "") and gstate("bq3").get("judge_ok", 0) == 0)
+        o_ = run("qgate", askp("bq3"), led)
+        check("background stub: the refused question says why, once", reason(o_).startswith("abofles: background Explain bx3: explainer reply has no QUESTION line") and "question gate" in reason(o_)
+              and not gstate("bq3").get("gate_note") and "no QUESTION line" not in reason(run("qgate", askp("bq3"), led)))
+        run("post", jpa("bq4", launch_("bx4"), "abofles:abofles-explainer", "Explain", 4), led)
+        run("stop", {"session_id": "bq4", "agent_id": "bx4", "last_assistant_message": "Understood."}, led)
+        o_ = run("prompt", {"session_id": "bq4", "cwd": cwd, "transcript_path": str(tr), "prompt": "<task-notification>bx4 done</task-notification>"}, led)
+        check("background stub: ... or the next prompt (the task notification) carries it as context", "explainer reply has no QUESTION line" in ctx(o_) and not gstate("bq4").get("gate_note"))
         # 4. which agents are gate agents
         check("is_gate_agent: exact abofles types (full or bare name) yes; a project agent named decision-judge no",
               H.is_gate_agent("abofles:abofles-judge", "") == "judge" and H.is_gate_agent("abofles-explainer", "") == "explain" and H.is_gate_agent("abofles:abofles-explainer", "x") == "explain"
@@ -1350,17 +1455,20 @@ def main():
         out = run("post", jpa("ba9", longq, "general-purpose", "Judge"), led)
         check("analyze: a general-purpose `/ Judge` spawn is graded as a judge — no long-line nag", "too long" not in ctx(out) and "absolute paths" not in ctx(out))
         # 5. SendMessage unlocks only for a gate agent this session spawned
-        sm = lambda sid_, to_: run("sendmsg", {"session_id": sid_, "cwd": cwd, "transcript_path": str(tr), "tool_name": "SendMessage", "tool_input": {"to": to_, "message": "m"}}, led)
+        sm = lambda sid_, to_, rid_=None: run("sendmsg", {"session_id": sid_, "cwd": cwd, "transcript_path": str(tr), "tool_name": "SendMessage", "tool_input": {"to": to_, "message": "m"}, "tool_response": {"success": True, "resumedAgentId": rid_ or to_}}, led)
         check("sendmsg: an unknown id, and a name that merely contains judge, unlock nothing", sm("ba8", "decision-judge") is None and sm("ba8", "judge-7") is None and sm("ba8", "a1b2c3") is None and gstate("ba8").get("judge_ok", 0) == 0)
         run("post", jpa("ba10", launch_("gj10")), led)
-        check("sendmsg: the id of a gate agent this session spawned still unlocks", "unlocked" in ctx(sm("ba10", "gj10")) and gstate("ba10").get("judge_ok") == 1 and gstate("ba10").get("judge_ok_ts"))
+        check("sendmsg: a message to a gate agent still running its first reply adds no unlock (that reply unlocks when it lands)", sm("ba10", "gj10") is None and gstate("ba10").get("judge_ok", 0) == 0)
+        run("stop", {"session_id": "ba10", "agent_id": "gj10", "last_assistant_message": ask}, led)
+        check("sendmsg: the id of a gate agent this session spawned still unlocks once its reply is in (one per reply)", gstate("ba10").get("judge_ok") == 1 and "unlocked" in ctx(sm("ba10", "gj10")) and gstate("ba10").get("judge_ok") == 2 and gstate("ba10").get("judge_ok_ts"))
         for sx_ in ("bc1", "bc2", "bc3"):
             run("start", {"session_id": sx_, "cwd": cwd, "transcript_path": str(tr)}, led)
             setst(sx_, gate="auto")
         pn_ = jpa("bc3", {"agentId": "gj3", "content": ask})
         run("post", dict(pn_, tool_input=dict(pn_["tool_input"], name="jq3")), led)
         check("gate_agents: the agent id and the spawn name are recorded, not the type name", gstate("bc3").get("gate_agents") == ["gj3", "jq3"])
-        check("sendmsg: the type name unlocks nothing; the id and the spawn name do", sm("bc3", "abofles-judge") is None and gstate("bc3").get("judge_ok") == 1 and "unlocked" in ctx(sm("bc3", "jq3")) and "unlocked" in ctx(sm("bc3", "gj3")) and gstate("bc3").get("judge_ok") == 3)
+        check("sendmsg: the type name unlocks nothing; the spawn name (reply id given) does, and a second message before that reply adds none", sm("bc3", "abofles-judge") is None and gstate("bc3").get("judge_ok") == 1
+              and "unlocked" in ctx(sm("bc3", "jq3", "gj3")) and sm("bc3", "gj3") is None and gstate("bc3").get("judge_ok") == 2)
         # 6. stale unlocks
         now_ = int(time.time())
         ids_ = lambda sid_: [i.get("id") for i in gitems(sid_)]
@@ -1387,6 +1495,10 @@ def main():
         check("qgate: a stale unlock (made before the task began) lets no question through", "question gate" in reason(run("qgate", askp("ba12"), led)) and gstate("ba12").get("judge_ok") == 1)
         setst("ba12", judge_ok=1, judge_ok_ts=now_ - 60, task_started=now_ - 5000, gate_wait_ts=0)
         check("qgate: a live unlock lets exactly one question through", run("qgate", askp("ba12"), led) is None and gstate("ba12").get("judge_ok") == 0)
+        setst("ba12", judge_ok=2, judge_ok_ts=now_ - 60, task_started=now_ - 5000, gate_wait_ts=0)  # two judged questions (two ASKs) merged into one box
+        two = dict(aq, session_id="ba12", tool_input={"questions": [dict(q, question=f"{q.get('question', '')} ({n})") for n, q in enumerate((aq.get("tool_input") or {}).get("questions") or [{}], 1)] * 2})
+        check("qgate: one ask carrying two judged questions spends both unlocks — no stale 'unasked' demand after it",
+              len(two["tool_input"]["questions"]) == 2 and run("qgate", two, led) is None and gstate("ba12").get("judge_ok") == 0)
         # 7. background spawns: run_in_background is async; a lost agent closes; an old task's pending row is not "running"
         for sx_ in ("bb1", "bb2"):
             run("start", {"session_id": sx_, "cwd": cwd, "transcript_path": str(tr)}, led)
@@ -1737,6 +1849,8 @@ def main():
         Path(xh, "led").mkdir(); Path(xh, "st").mkdir()
         st_ = lambda *a: subprocess.run([sys.executable, str(sdir / "status.py"), *a], cwd=xp, capture_output=True, text=True, env=xenv)
         me_ = lambda *a: subprocess.run([sys.executable, str(sdir / "memo.py"), *a], cwd=xp, capture_output=True, text=True, env=xenv)
+        Path(xh, "led", "gs.jsonl").write_text(json.dumps({"ts": int(time.time()), "session": "gs", "cwd": xp, "agent_id": "g1", "side": "Git", "agent": "abofles:abofles-git", "model": "haiku", "effort": "low", "status": "completed", "confidence": "high"}) + "\n")
+        check("status: the Sides line counts the Git side after Work", "Git 1" in st_("--session", "gs").stdout)
         check("exit: status --resolve with no ledger at all exits 1", st_("--resolve", "abc", "--trace", "re-checked: t").returncode == 1)
         lf = Path(xh, "led", "xs.jsonl")
         lf.write_text('{"agent_id": "abc123", "status": "partial"}\nHALF{"agent_id":"abc9\n{"agent_id": "abd1", "status": "blocked"}\n')
@@ -1849,6 +1963,8 @@ def main():
         check("review gate: a mid-turn receipt closes the task, raises the missing reviewers in the guide, and the closing spawn keeps the item",
               rst("rv3").get("spawns_since_receipt") == 1 and rst("rv3").get("review_missing", {}).get("names") == ["finance", "security", "tester"])
         check("review: the gate's cell text comes from workflow.json", R.verify_cell(4) == ("opus", "high") and R.verify_cell(3) == ("sonnet", "high") and (R.workflow_table().get("verify") or {}).get("4") == "opus·high")
+        dvq_ = (R.workflow_table().get("topics") or {}).get("Data Validation QA (reports, numbers, totals)") or {}
+        check("review: Data Validation QA (reports, numbers, totals) is reviewed by QA and Data at T3, not Finance", (dvq_.get("reviewers") or {}).get("3") == ["qa", "data"] and "finance" not in sum((dvq_.get("reviewers") or {}).values(), []))
         check("review: gen_matrix --check is up to date", subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "gen_matrix.py"), "--check"], capture_output=True, text=True).returncode == 0)
         os.environ["ABOFLES_STATE_DIR"] = state
 
@@ -1869,7 +1985,7 @@ def main():
         run("start", {"session_id": "mv1", "cwd": str(A)}, led2)
         run("receipt", {"session_id": "mv1", "cwd": str(A), "stop_hook_active": False, "last_assistant_message": RCM}, led2)
         memA, memB = W.memo_path(str(A)), W.memo_path(str(B))
-        check("work: a receipt lands in the launch folder before any edit", memA.exists() and "(s:mv1)" in memA.read_text() and W.session_memo_path(str(A), "mv1").exists())
+        check("work: a receipt lands in the launch folder before any edit", memA.exists() and "(s:mv1 p:A)" in memA.read_text() and W.session_memo_path(str(A), "mv1").exists())
         check("work: the memo headers carry the project path", f"Project: {os.path.realpath(A)}" in memA.read_text() and f"Project: {os.path.realpath(A)}" in W.session_memo_path(str(A), "mv1").read_text())
         ed("mv1", A / "x.txt")
         ed("mv1", B / "b1.py"); ed("mv1", B / "b2.py", "Write")
@@ -1880,7 +1996,7 @@ def main():
         check("work: the third edit in B (more than in A) moves the session's memo to B", wst("mv1").get("project") == os.path.realpath(B) and sB.exists() and memB.exists())
         check("work: the session file moved with its Now, Journal and a 'moved here' trace line",
               "moved thing" in sB.read_text() and "moved here from A: most edits of this session land in this repository" in sB.read_text() and not W.session_memo_path(str(A), "mv1").exists())
-        check("work: its Needs-you item moved and was renumbered; A's index line is gone", "1. [ ]" in W.memo_read(str(B))["Needs you"] and "(s:mv1)" in memB.read_text()
+        check("work: its Needs-you item moved and was renumbered; A's index line is gone", "1. [ ]" in W.memo_read(str(B))["Needs you"] and "(s:mv1 p:B)" in memB.read_text()
               and "(s:mv1)" not in memA.read_text() and not any(k == "mv1" for k, _ in W.index_entries(W.memo_read(str(A)))) and any(k == "mv1" for k, _ in W.index_entries(W.memo_read(str(B)))))
         check("work: a trace line is not a receipt", W.index_field([l for k, l in W.index_entries(W.memo_read(str(B))) if k == "mv1"][0], "receipts") == "1")
         run("receipt", {"session_id": "mv1", "cwd": str(A), "stop_hook_active": False, "last_assistant_message": RCM.replace("moved thing", "second thing")}, led2)
@@ -1911,13 +2027,29 @@ def main():
               and run("edit", {"session_id": "mv3", "cwd": str(B), "tool_name": "Read", "tool_input": {"file_path": str(C / "z.py")}}, led2) is None and wst("mv3")["work"].get(os.path.realpath(C)) == 4)
         run("start", {"session_id": "mv3", "cwd": str(B), "source": "clear"}, led2)
         check("work: /clear or a new session starts the count again", "work" not in wst("mv3") and "project" not in wst("mv3"))
+        # Bash git writes with a clear target repository count like edits there
+        run("start", {"session_id": "bw1", "cwd": str(A)}, led2)
+        gb = lambda sid_, cmd: run("guard", {"session_id": sid_, "cwd": str(A), "tool_name": "Bash", "tool_input": {"command": cmd}}, led2)
+        check("work: bash_write_targets reads `git -C <path> <write>` and `cd <path> && git <write>`, nothing else",
+              W.bash_write_targets(f"git -C {C} commit -m x", str(A)) == [str(C)] and W.bash_write_targets(f"cd {C} && git add . && git commit -m 'git -C /x push'", str(A)) == [str(C)]
+              and W.bash_write_targets("git commit -m x", str(A)) == [] and W.bash_write_targets(f"git -C {C} status", str(A)) == [] and W.bash_write_targets("gh -R o/r pr create", str(A)) == []
+              and W.bash_write_targets("git -C $REPO commit -m x", str(A)) == [] and W.bash_write_targets(f"git -C {Path(wh, 'nope')} commit", str(A)) == [] and W.bash_write_targets("git -C C commit -m x", wh) == [os.path.join(wh, "C")])
+        gb("bw1", f"git -C {C} add a.py"); gb("bw1", f"cd {C} && git commit -m one")
+        check("work: two Bash git writes into C are counted for C, the memo stays below 3", wst("bw1").get("work", {}).get(os.path.realpath(C)) == 2 and not wst("bw1").get("project"))
+        gb("bw1", "git commit -m 'no path: the shell may be anywhere'"); gb("bw1", "gh -R o/r pr create --fill")
+        check("work: a git write with no path and `gh -R` count for nothing", wst("bw1").get("work", {}).get(os.path.realpath(C)) == 2 and len(wst("bw1").get("work", {})) == 1)
+        gb("bw1", f"git -C {C} push origin main")
+        check("work: the third Bash git write into C moves the memo there", wst("bw1").get("project") == os.path.realpath(C))
+        run("start", {"session_id": "bw2", "cwd": str(A)}, led2)
+        ed("bw2", C / "new" / "deep" / "f.py", "Write")
+        check("work: a Write of a new file in a new folder of C counts for C's repository root", wst("bw2").get("work", {}).get(os.path.realpath(C)) == 1)
         # scopes: session / project (default) / all; a session with nothing of its own sees a hint line
         run("start", {"session_id": "oth1", "cwd": str(B)}, led2)
         run("receipt", {"session_id": "oth1", "cwd": str(B), "stop_hook_active": False, "last_assistant_message": RCM.replace("moved thing", "other thing").replace("keep the banner wide or narrow", "ship the footer today or next week")}, led2)
         rb_p = W.resume_block(str(B), session_id="mv1")
         rb_s = W.resume_block(str(B), session_id="mv1", scope="session")
-        check("scope: project (default) shows every open item of the project", "2 open" in rb_p and "(s:oth1)" in rb_p and "(s:mv1)" in rb_p and "· scope" not in rb_p)
-        check("scope: session shows only this session's items and says so in the header", "· scope session" in rb_s and "1 open" in rb_s and "(s:oth1)" not in rb_s and "(s:mv1)" in rb_s)
+        check("scope: project (default) shows every open item of the project", "2 open" in rb_p and "other session oth1 · B · " in rb_p and "(s:oth1" not in rb_p and "(s:mv1 p:B)" in rb_p and "· scope" not in rb_p)
+        check("scope: session shows only this session's items and says so in the header", "· scope session" in rb_s and "1 open" in rb_s and "oth1" not in rb_s and "(s:mv1 p:B)" in rb_s)
         rb_n = W.resume_block(str(B), session_id="newS1")
         check("scope: a session with nothing of its own gets one hint line instead of the other sessions' lines",
               "- `project` → B: 2 other sessions, newest " in rb_n and "their work, not yours; `/abofles:resume --scope project` shows them" in rb_n and "not this one" not in rb_n and "- `now` →" not in rb_n)
@@ -1935,7 +2067,7 @@ def main():
         Path(B, "CLAUDE.md").unlink(); W.config_write({})
         st1 = wst("mv1")
         gi = lambda sc: " | ".join(t for _, t in W.guide_items(str(B), st1, "mv1", scope=sc))
-        check("scope: the guide counts owner decisions by scope", "1 owner decision open" in gi("session") and "2 owner decisions open" in gi("project") and "2 owner decisions open" in gi("all")
+        check("scope: the guide counts owner decisions by scope", "1 owner decision open" in gi("session") and "(+1 of other sessions, not yours)" not in gi("session") and "1 owner decision open" in gi("project") and "(+1 of other sessions, not yours)" in gi("project") and "(+1 of other sessions, not yours)" in gi("all")
               and "open in other project: A (1)" in gi("all") and "other project" not in gi("project"))
         # memo.py: --scope, scope <value>, and no write without a session state
         sdir2 = Path(__file__).resolve().parent
@@ -1945,7 +2077,7 @@ def main():
         check("memo.py: show --scope all prints the elsewhere lines with each project's first open item", re.search(r"^  - A · 1 open: owner decision: A keeps this one$", mp("show", "--scope", "all").stdout, re.M) is not None)
         rs, rp, ra = (mp("show", "--scope", x).stdout for x in ("session", "project", "all"))
         check("memo.py: the guide line of the block follows the scope too (session: own decision only; project: both; all: other projects counted)",
-              "🟠 1 owner decision open" in rs.split("- `guide`")[1] and "(s:oth1)" not in rs and "🟠 2 owner decisions open" in rp.split("- `guide`")[1] and "open in other project: A (1)" in ra.split("- `guide`")[1] and "other project" not in rp)
+              "🟠 1 owner decision open" in rs.split("- `guide`")[1] and "oth1" not in rs and "🟠 1 owner decision open" in rp.split("- `guide`")[1] and "(+1 of other sessions, not yours)" in rp.split("- `guide`")[1] and "open in other project: A (1)" in ra.split("- `guide`")[1] and "other project" not in rp)
         check("memo.py: an unknown --scope exits 2", mp("show", "--scope", "bogus").returncode == 2)
         r = mp("scope", "all")
         check("memo.py: scope <value> saves the user default", r.returncode == 0 and r.stdout.strip() == "saved as the default · scope: all (from the saved default (" + str(Path(wh, "config.json")) + "))" and json.loads(Path(wh, "config.json").read_text())["resume_scope"] == "all")
@@ -1962,15 +2094,38 @@ def main():
         check("memo.py: show with no session state still reads", mp("show", cwd=D, env=env3).returncode == 0)
         check("memo.py: a write from the launch folder goes to the work root", mp("note", "settled in chat", cwd=A).returncode == 0 and "settled in chat" in memB.read_text() and "settled in chat" not in memA.read_text())
         # memo.py move <root>: a misfiled session moved by hand (oth1 from B to D), state follows
+        check("memo.py: move to a folder that is no repository top (`/`, a plain folder, a repo's subfolder) exits 2 and moves nothing",
+              mp("move", "/", "--session", "oth1", cwd=B, env=env3).returncode == 2 and mp("move", str(D), "--session", "oth1", cwd=B, env=env3).returncode == 2
+              and (not gitok or (Path(B, "sub9").mkdir(exist_ok=True) or mp("move", str(Path(B, "sub9")), "--session", "oth1", cwd=B, env=env3).returncode == 2)) and not W.session_memo_path(str(D), "oth1").exists())
+        subprocess.run(["git", "init", "-q"], cwd=D, capture_output=True)
         r = mp("move", str(D), "--session", "oth1", cwd=B, env=env3)
         check("memo.py: move <root> moves the session's memo and sets its project", r.returncode == 0 and r.stdout.startswith("moved: session oth1 → ") and W.session_memo_path(str(D), "oth1").exists()
               and "other thing" in W.session_memo_path(str(D), "oth1").read_text() and "moved here from B" in W.session_memo_path(str(D), "oth1").read_text()
-              and not W.session_memo_path(str(B), "oth1").exists() and "(s:oth1)" not in memB.read_text() and "(s:oth1)" in W.memo_path(str(D)).read_text() and wst("oth1").get("project") == os.path.realpath(D))
+              and not W.session_memo_path(str(B), "oth1").exists() and "(s:oth1" not in memB.read_text() and "(s:oth1 p:" + os.path.basename(str(D)) + ")" in W.memo_path(str(D)).read_text() and wst("oth1").get("project") == os.path.realpath(D))
         check("memo.py: move to the same folder exits 3, a missing folder exits 2", mp("move", str(D), "--session", "oth1", cwd=B, env=env3).returncode == 3 and mp("move", str(Path(wh, "nope")), "--session", "oth1", cwd=B, env=env3).returncode == 2)
         check("memo.py: after the move, oth1's own items are gone from B and the guide of B counts one", "1 owner decision open" in gi("project"))
+        check("memo.py: a hand move pins the memo (project_pinned = the folder)", wst("oth1").get("project_pinned") == os.path.realpath(D))
+        for n in range(5):
+            run("edit", {"session_id": "oth1", "cwd": str(B), "tool_name": "Edit", "tool_input": {"file_path": str(B / f"pin{n}.py")}}, led2)
+        check("memo.py: after a hand move to D, 5 edits in the launch folder B do not move the memo back", wst("oth1").get("project") == os.path.realpath(D)
+              and W.session_memo_path(str(D), "oth1").exists() and not W.session_memo_path(str(B), "oth1").exists() and "moved here from D" not in (W.session_memo_path(str(B), "oth1").read_text() if W.session_memo_path(str(B), "oth1").exists() else ""))
+        run("start", {"session_id": "oth1", "cwd": str(B), "source": "clear"}, led2)
+        check("memo.py: the pin survives a /clear of the same session", wst("oth1").get("project") == os.path.realpath(D) and wst("oth1").get("project_pinned") == os.path.realpath(D))
+        run("start", {"session_id": "oth1", "cwd": str(D), "source": "startup"}, led2)
+        check("memo.py: a start in the pinned folder itself keeps the pin, with no separate project", not wst("oth1").get("project") and wst("oth1").get("project_pinned") == os.path.realpath(D))
+        run("start", {"session_id": "oth1", "cwd": str(B), "source": "startup"}, led2)
         import shutil; shutil.rmtree(Path(D, ".claude"))
         gp = lambda *a: subprocess.run([sys.executable, str(sdir2 / "guide.py"), *a], cwd=A, capture_output=True, text=True, env=env2)
         check("guide.py: --scope all names the other project's open decisions", "open in other project: A (1)" in gp("--scope", "all").stdout and gp("--scope", "bogus").returncode == 2)
+        # memo_move: the session's open items go to the new memo and leave the old one; its resolved items stay behind
+        X_, Y_ = Path(wh, "X"), Path(wh, "Y")
+        X_.mkdir(); Y_.mkdir()
+        W.memo_needs(str(X_), "mvo1xxxx", "owner decision: open one?"); W.memo_needs(str(X_), "mvo1xxxx", "owner decision: settled one?"); W.memo_needs(str(X_), "othr2xxx", "owner decision: theirs?")
+        W.memo_resolve(str(X_), 2, "done", "mvo1xxxx")
+        W.memo_move(str(X_), str(Y_), "mvo1xxxx", "moved by hand (memo.py move)")
+        nx_, ny_ = W.memo_read(str(X_))["Needs you"], W.memo_read(str(Y_))["Needs you"]
+        check("memo move: the open item of the session moved (tagged for the new project), the old memo lost it; the resolved one and another session's stay",
+              "open one?" in ny_ and "(s:mvo1xxxx p:Y)" in ny_ and "open one?" not in nx_ and "settled one?" in nx_ and "settled one?" not in ny_ and "theirs?" in nx_ and "theirs?" not in ny_)
         os.environ["ABOFLES_STATE_DIR"] = state
 
     # scripts: project-scoped ledger, the user's --session wins, a trailing empty --session is ignored
@@ -2072,10 +2227,10 @@ def main():
         run("start", {"session_id": "tp", "cwd": cwd}, led)
         json.dump(dict(json.loads(Path(state, "tp.json").read_text()), gate="auto"), open(Path(state, "tp.json"), "w"))
         out = run("pre", dict(agent("haiku", "low", prompt="abofles: Postgres Replica Thing / Read · T3\nq\nLine cap: 40", cwd=cwd), session_id="tp"), led)
-        check("pre: a header topic not in the index -> advisory note with the nearest names", "not in the index — nearest:" in ctx(out) and "Replica" in ctx(out) and reason(out) and (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "allow")
+        check("pre: a header topic not in the index -> advisory note with the nearest names", "not in the index — nearest:" in ctx(out) and "Replica" in ctx(out) and not reason(out) and "permissionDecision" not in json.dumps(out))
         json.dump(dict(json.loads(Path(state, "tp.json").read_text()), inflight=0), open(Path(state, "tp.json"), "w"))
         out = run("pre", dict(agent("opus", "high", prompt="abofles: Codebase Exploration & Onboarding / Read · T1\nq\nLine cap: 40", cwd=cwd), session_id="tp"), led)
-        check("pre: first spawn above the cell's model -> '× the cell' note, still allowed", "× the cell" in ctx(out) and "haiku·low" in ctx(out) and (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "allow")
+        check("pre: first spawn above the cell's model -> '× the cell' note, still allowed", "× the cell" in ctx(out) and "haiku·low" in ctx(out) and not reason(out) and "permissionDecision" not in json.dumps(out))
         json.dump(dict(json.loads(Path(state, "tp.json").read_text()), inflight=0), open(Path(state, "tp.json"), "w"))
         out = run("pre", dict(agent("haiku", "low", prompt="abofles: Codebase Exploration & Onboarding / Read · T1\nq\nLine cap: 40", cwd=cwd), session_id="tp"), led)
         check("pre: a spawn at the cell -> no cell note", "× the cell" not in ctx(out))
@@ -2218,14 +2373,44 @@ def main():
         finally:
             time.time = _t0
         GOLD = {
-            'project': "📍 **Resume** · memo 2026-10-20 10:30 · session goldsess · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) ATTENTION: banner copy needs your OK (s:othersess)\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first\n- `guide` → 🧭 ✅ nothing open",
-            'away': "📍 **Resume** · memo 2026-10-20 10:30 · away 42 min · session goldsess · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) ATTENTION: banner copy needs your OK (s:othersess)\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first",
+            'project': "📍 **Resume** · memo 2026-10-20 10:30 · session goldsess · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) other session othersess · ATTENTION: banner copy needs your OK\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first\n- `guide` → 🧭 ✅ nothing open",
+            'away': "📍 **Resume** · memo 2026-10-20 10:30 · away 42 min · session goldsess · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) other session othersess · ATTENTION: banner copy needs your OK\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first",
             'session': "📍 **Resume** · memo 2026-10-20 10:30 · session goldsess · scope session · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 1 open: 1) owner decision: cap per unit or per order? (s:goldsess)\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first",
-            'hint': "📍 **Resume** · memo 2026-10-20 10:30 · session freshses\n- `project` → goldproj: 2 other sessions, newest goldsess · task: cap the surcharge — their work, not yours; `/abofles:resume --scope project` shows them\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) ATTENTION: banner copy needs your OK (s:othersess)",
-            'all': "📍 **Resume** · memo 2026-10-20 10:30 · session goldsess · scope all · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) ATTENTION: banner copy needs your OK (s:othersess)\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first",
+            'hint': "📍 **Resume** · memo 2026-10-20 10:30 · session freshses\n- `project` → goldproj: 2 other sessions, newest goldsess · task: cap the surcharge — their work, not yours; `/abofles:resume --scope project` shows them\n- `needs you` → 2 open\n  - 1) other session goldsess · owner decision: cap per unit or per order?\n  - 3) other session othersess · ATTENTION: banner copy needs your OK",
+            'all': "📍 **Resume** · memo 2026-10-20 10:30 · session goldsess · scope all · now written 2026-10-20 10:00 (3 hours 30 min ago)\n- `now` → cap the surcharge in AqsatiRules.cs\n- `left` →\n  - wire the FE badge\n  - update the docs page\n- `next` → run the full suite\n- `since` → 3 receipts of this session after its Now section was written — `now`/`next` above may be stale; trust `last` and the journal\n- `needs you` → 2 open\n  - 1) owner decision: cap per unit or per order? (s:goldsess)\n  - 3) other session othersess · ATTENTION: banner copy needs your OK\n- `last` →\n  - 10-20 10:20 · 🧾 **1 Spawn · Saved 5%** · done: capped it\n  - 10-20 10:10 · 🧾 **2 Spawns** · done: read the rules\n  - 10-20 10:05 · 🧾 **1 Spawn** · done: first",
         }
         for _k, _v in GOLD.items():
             check(f"resume_block golden text ({_k}) is byte-identical", gold_out[_k] == _v)
+        # Needs-you origin: another session's (or another project's) item is information, never part of a fill, a guide instruction or a receipt `next`
+        ox = str(Path(tempfile.mkdtemp(), "projx")); Path(ox, ".claude", "abofles-memo.d").mkdir(parents=True)
+        def ox_memo(lines):
+            Path(ox, ".claude", "abofles-memo.md").write_text("# Abo Fles memo — x\nUpdated: 2026-11-01 10:00 · session meses1xx\nProject: x\n\n## Needs you\n" + "\n".join(lines) + "\n\n## Decisions\n\n## Sessions\n")
+        ox_memo(["1. [ ] 11-01 09:00 · owner decision: legacy line? ", "2. [ ] 11-01 09:01 · owner decision: mine one? (s:meses1xx p:projx)", "3. [ ] 11-01 09:02 · owner decision: othersess zebra? (s:othses1x p:projx)",
+                 "4. [ ] 11-01 09:03 · owner decision: project B yak? (s:meses1xx p:projB)", "5. [ ] 11-01 09:04 · owner decision: old tag walrus? (s:oldses1x)"])
+        oge = HG.guide_entries(ox, {}, "meses1xx", scope="project")
+        odec = next(i for i in oge if i["id"].startswith("dec:"))
+        oall = json.dumps(oge, ensure_ascii=False)
+        check("origin: the guide's owner-decision item counts own + untagged items only and says how many belong to other sessions", odec["text"].startswith("2 owner decisions open") and "(+3 of other sessions, not yours)" in odec["text"])
+        check("origin: no guide fill or recheck mentions another session's / another project's item", not any(w in oall for w in ("zebra", "yak", "walrus")))
+        check("origin: the item of this session keeps its origin in the fill", "legacy line" in odec["fill"] and "(from " not in odec["fill"])
+        ox_memo(["1. [ ] 11-01 09:02 · owner decision: othersess zebra? (s:othses1x p:projx)", "2. [ ] 11-01 09:03 · owner decision: project B yak? (s:meses1xx p:projB)"])
+        check("origin: when every open item is another session's, the guide makes no owner-decision item at all", not any(i["id"].startswith("dec:") for i in HG.guide_entries(ox, {}, "meses1xx", scope="project")))
+        pr0 = HG.pane_resume(ox, "meses1xx")
+        check("origin: the pane lists them as information (other: true, prefixed), counts none as open, and has no needs_fill", pr0["needs_open"] == 0 and pr0["needs_fill"] is None and len(pr0["needs"]) == 2
+              and all(n.get("other") and n["text"].startswith("other session ") for n in pr0["needs"]) and "other session meses1xx · projB · owner decision: project B yak?" in pr0["needs"][1]["text"])
+        ox_memo(["1. [ ] 11-01 09:00 · owner decision: legacy line? ", "2. [ ] 11-01 09:01 · owner decision: mine one? (s:meses1xx p:projx)", "3. [ ] 11-01 09:02 · owner decision: othersess zebra? (s:othses1x p:projx)", "4. [ ] 11-01 09:05 · owner decision: old tag walrus? (s:oldses1x)"])
+        pr1 = HG.pane_resume(ox, "meses1xx")
+        check("origin: needs_fill (Check all) works through the session's own + legacy items only; the others are listed, unfillable", pr1["needs_open"] == 2 and pr1["needs_fill"] and "legacy line" in pr1["needs_fill"] and "mine one" in pr1["needs_fill"]
+              and not any(w in pr1["needs_fill"] for w in ("zebra", "walrus")) and "(from session meses1xx" in pr1["needs_fill"] and [bool(n.get("other")) for n in pr1["needs"]] == [False, False, True, True])
+        rbx = HG.resume_block(ox, session_id="meses1xx")
+        check("origin: the resume block shows another session's item as `other session <id> · …`, old untagged lines as before", "4 open" in rbx and "other session othses1x · projx · owner decision: othersess zebra?" in rbx and "1) owner decision: legacy line?" in rbx)
+        sx = {"started": 1, "root": ox}
+        HG.refresh_guide(ox, sx, "meses1xx")
+        rk, rins = HG.receipt_decision(ox, sx, "meses1xx")
+        check("origin: the receipt's `next` (the guide line) is the same filtered list — never another session's item", "owner decision" in sx["guide"]["line"] and not any(w in rins for w in ("zebra", "walrus")))
+        mx_ = HG.memo_needs(ox, "meses1xx", "owner decision: archive closed accounts?")
+        check("origin: a new Needs-you item is tagged with its session and project", "(s:meses1xx p:projx)" in Path(ox, ".claude", "abofles-memo.md").read_text() and "archive closed accounts" in Path(ox, ".claude", "abofles-memo.md").read_text())
+        check("origin: need_split: a legacy `(s:id)` tag of another session is information; a tag for another project is too", HG.need_split(["1. [ ] 1 2 · a (s:me)", "2. [ ] 1 2 · b (s:me p:other)", "3. [ ] 1 2 · c", "4. [ ] 1 2 · d (s:you)"], "me", "/x/projx") == (["1. [ ] 1 2 · a (s:me)", "3. [ ] 1 2 · c"], ["2. [ ] 1 2 · b (s:me p:other)", "4. [ ] 1 2 · d (s:you)"]))
 
         # places and the mod switch
         chome = Path(state, "claude-home"); HG.LEDGER_DIR = Path(led)
@@ -2300,7 +2485,7 @@ def main():
         check("pane: start writes the payload with v, ts, root, sid, places, resume, spawns, overrides, cmd", {"v", "ts", "root", "sid", "places", "resume", "spawns", "overrides", "cmd"} <= set(pn_) and pn_["v"] == 1 and pn_["sid"] == ps and pn_["root"] == pd)
         check("pane: places are the effective ones (mod on -> pane)", pn_["places"] == {"guide": "pane", "resume": "pane", "spawns": "pane"})
         rs_ = pn_["resume"] or {}
-        check("pane: resume has head, now, left, next, needs (n + text), needs_open, last", set(rs_) == {"head", "now", "left", "next", "needs", "needs_open", "last"} and rs_["now"] == ["write the pane"] and rs_["left"] == ["tests", "docs"]
+        check("pane: resume has head, now, left, next, needs (n + text), needs_open, last", set(rs_) == {"head", "now", "left", "next", "needs", "needs_open", "needs_fill", "last"} and rs_["now"] == ["write the pane"] and rs_["left"] == ["tests", "docs"]
               and rs_["needs"] == [{"n": 1, "text": "owner decision: cap per unit or per order?"}] and rs_["needs_open"] == 1 and rs_["head"].startswith("📍 Resume") and "**" not in rs_["head"] and "`" not in rs_["head"] and rs_["last"] == [])
         check("pane: resume texts are clipped to PANE_TEXT (600) characters", len(rs_["next"][0]) == HG.PANE_TEXT and rs_["next"][0].endswith("…"))
         ov_ = pn_["overrides"]; okeys = {k["key"]: k for k in ov_["keys"]}
@@ -2539,7 +2724,406 @@ def main():
         check("README: ... and every COMPLEX_FORMS form (one row each)", len(form_marks) == len(HG.COMPLEX_FORMS) and all(re.search(r"^\| `" + re.escape(m), sec_, re.M) for m in form_marks))
         check("README: ... with defaults from the code, the pane editor, /abofles:pane and /abofles:spawns", all(f"| `{k}` |" in sec_ and (v["default"] in sec_ if v["default"] else True) for k, v in HG.OVERRIDE_KEYS.items()) and "/abofles:pane" in sec_ and "/abofles:spawns" in sec_ and "pane" in sec_.split("| `Main session`")[0])
         check("overrides.md: the four place forms are described and the form count matches the code", all(f"`{w} place = " in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() for w in ("Guide", "Resume", "Spawns", "Receipt"))
-              and f"Twenty-four forms" in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() and len(HG.OVERRIDE_KEYS) + len(HG.COMPLEX_FORMS) == 24)
+              and f"Twenty-six forms" in (HOOK.parent.parent / "skills/abofles/references/overrides.md").read_text() and len(HG.OVERRIDE_KEYS) + len(HG.COMPLEX_FORMS) == 26)
+
+        # Check all: one instruction over every open item; the Needs-you card's needs_fill
+        ci_ = lambda t, f: HG.guide_item("🟠", t, f, id=t)
+        ca_ = HG.guide_check_all([ci_("a", "abofles: fix the open FAIL on Pay."), ci_("b", "abofles: owner decision 3 is open: cap. Judge it first, then ask me with AskUserQuestion."), ci_("c", "abofles: collect the background agents and print their receipt.")])
+        check("check all: no items and one item -> None", HG.guide_check_all([]) is None and HG.guide_check_all([ci_("a", "abofles: x")]) is None)
+        check("check all: 3 items -> n 3 and one numbered instruction holding each item's own Use text in ladder order",
+              ca_["n"] == 3 and ca_["fill"].startswith("abofles: work through every open item") and ca_["fill"].index("1) fix the open FAIL on Pay.") < ca_["fill"].index("2) owner decision 3 is open: cap.") < ca_["fill"].index("3) collect the background agents"))
+        check("check all: Needs-you items are resolved only with evidence via memo.py resolve <n> <note>, owner decisions are asked, not guessed",
+              "memo.py" in ca_["fill"] and "resolve <n> --trace \"<note>\"" in ca_["fill"] and "only with evidence" in ca_["fill"] and "AskUserQuestion" in ca_["fill"] and "never guessed" in ca_["fill"])
+        cs2_ = HG.guide_check_all([ci_("a", "abofles: fix the open FAIL on Pay."), ci_("b", "abofles: x")], "sess 1")
+        check("check all: the resolve hint carries --session <sid> and --trace like the single-item recheck, so a resolve writes the Journal line",
+              "resolve <n> --session 'sess 1' --trace \"<note>\"" in cs2_["fill"] and "memo.py" in cs2_["fill"])
+        wi_ = lambda i, t, f: HG.guide_item("🧠", t, f, id=i)
+        cw_ = HG.guide_check_all([wi_("ctx:600", "c", "/abofles:memo"), wi_("memo-age", "m", "/abofles:memo"), wi_("budget", "b", "/abofles:agents"), ci_("z", "abofles: fix it.")])["fill"]
+        check("check all: context, memo-age and budget items say what to do in words, not a bare slash command",
+              "1) save the work memo now: run /abofles:memo, then /compact" in cw_ and "2) save the work memo now: run /abofles:memo." in cw_
+              and "3) agent budget nearly out — finish the rest in the main session, or ask me whether to raise it (/abofles:agents)." in cw_ and not re.search(r"\d\) /abofles:", cw_))
+        check("check all: a single item's Use fill stays the bare slash command", wi_("budget", "b", "/abofles:agents")["fill"] == "/abofles:agents")
+        cdir = tempfile.mkdtemp(); cs_ = "checkall1"; hg_state_ = HG.STATE_DIR; HG.STATE_DIR = Path(state)  # the in-process calls below read and write the session state the subprocess hooks use
+        HG.memo_needs(cdir, cs_, "owner decision: cap per unit or per order?")
+        run("start", {"session_id": cs_, "cwd": cdir}, led)
+        st_ = HG.load_state(cs_); HG.refresh_guide(cdir, st_, cs_); HG.save_state(cs_, st_)
+        check("check all: one open item -> guide.all is None and the Needs-you card has no needs_fill", gstate(cs_)["guide"]["all"] is None and gstate(cs_)["pane"]["resume"]["needs_fill"] is None)
+        HG.memo_needs(cdir, cs_, "owner decision: round half up or even?")
+        st_ = HG.load_state(cs_); st_["receipt_owed"] = True; HG.refresh_guide(cdir, st_, cs_); HG.save_state(cs_, st_)
+        ga_ = gstate(cs_)["guide"]["all"]; nf_ = gstate(cs_)["pane"]["resume"]["needs_fill"]
+        check("check all: refresh_guide keeps guide.all = {n, fill} for the 2 items (owner decision, receipt owed)", ga_ and ga_["n"] == 2 and "1) owner decision 1 is open: owner decision: cap per unit" in ga_["fill"] and "2) the receipt of this task is still owed" in ga_["fill"])
+        check("check all: 2 open Needs-you items -> needs_fill numbers each one and names the evidence rule; below 2 it is None",
+              nf_ and nf_.startswith("abofles: work through every open Needs-you item") and "1) owner decision 1 is open: owner decision: cap per unit" in nf_ and "2) owner decision 2 is open: owner decision: round half up" in nf_ and "only with evidence" in nf_)
+        gcli_ = lambda *a, c=cdir: subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "guide.py"), *a, "--session", cs_], cwd=c, capture_output=True, text=True, env=dict(os.environ, ABOFLES_LEDGER_DIR=led, ABOFLES_STATE_DIR=state))
+        check("guide.py --check-all: prints the same instruction (2 items), --all still lists the items", gcli_("--check-all").stdout.strip() == ga_["fill"] and gcli_("--all").stdout.count("\n") == 2)
+        HG.memo_resolve(cdir, 2, "answered in the test"); HG.memo_resolve(cdir, 1, "answered in the test")
+        st_ = HG.load_state(cs_); st_.pop("receipt_owed", None); HG.refresh_guide(cdir, st_, cs_); HG.save_state(cs_, st_)
+        check("guide.py --check-all: fewer than 2 open items -> one line saying so", gcli_("--check-all").stdout.startswith("abofles: fewer than 2 open items"))
+        cdir9_ = tempfile.mkdtemp()
+        for w_ in "alpha bravo charlie delta echo foxtrot golf hotel india juliet".split():
+            HG.memo_needs(cdir9_, "cap9", f"owner decision: {w_} setting?")
+        nf9_ = HG.pane_resume(cdir9_, "cap9")["needs_fill"]
+        check("check all: Needs-you card with 10 open -> 8 numbered, then `+2 more — run Check all again after these`",
+              "8) owner decision 8" in nf9_ and "9) " not in nf9_ and nf9_.endswith("+2 more — run Check all again after these"))
+        HG.memo_resolve(cdir9_, 10, "x"); HG.memo_resolve(cdir9_, 9, "x"); HG.memo_resolve(cdir9_, 8, "x")
+        check("check all: 7 open -> all numbered and no `more` tail", "7) owner decision 7" in HG.pane_resume(cdir9_, "cap9")["needs_fill"] and "more — run Check all again" not in HG.pane_resume(cdir9_, "cap9")["needs_fill"])
+        HG.STATE_DIR = hg_state_
+
+        # Decisions: marked by:you / by:judge, parsed back, grouped for the pane
+        dd_ = tempfile.mkdtemp(); d1_, d2_ = "decsess1", "decsess2"
+        HG.memo_decision(dd_, d1_, "Per unit or per order?", "Per order")
+        HG.memo_decision(dd_, d1_, "judge: Is the cap per unit?", "Yes (src/a.cs:12)", by="judge")
+        HG.memo_decision(dd_, "", "note", "round half up")
+        sl_ = HG.session_memo_path(dd_, d1_).read_text(); ml_ = HG.memo_path(dd_).read_text()
+        check("decisions: a question writes `- MM-DD HH:MM · by:you · q → a`, a judge's ANSWERED by:judge with its `judge: ` prefix, `memo.py note` by:you",
+              re.search(r"^- \d\d-\d\d \d\d:\d\d · by:you · Per unit or per order\? → Per order$", sl_, re.M) and re.search(r"^- \d\d-\d\d \d\d:\d\d · by:judge · judge: Is the cap per unit\? → Yes \(src/a\.cs:12\)$", sl_, re.M)
+              and re.search(r"^- \d\d-\d\d \d\d:\d\d · by:you · note → round half up$", ml_, re.M))
+        pdc_ = lambda l: HG.parse_decision(l)
+        check("parse_decision: marked lines give ts, q, a, by", pdc_("- 10-27 09:15 · by:judge · judge: Is it? → Yes") == {"ts": "10-27 09:15", "q": "judge: Is it?", "a": "Yes", "by": "judge"}
+              and pdc_("- 10-27 09:15 · by:you · Keep it? → No")["by"] == "you")
+        check("parse_decision: a line from before the marker is judge when the question starts with `judge: `, else you",
+              pdc_("- 10-27 09:15 · judge: Is it? → Yes")["by"] == "judge" and pdc_("- 10-27 09:15 · Per unit or per order? → Per order") == {"ts": "10-27 09:15", "q": "Per unit or per order?", "a": "Per order", "by": "you"})
+        HG.memo_decision(dd_, d2_, "Rename a · b → c?", "Yes → do it")
+        rt_ = HG.parse_decision([l for l in HG.session_memo_path(dd_, d2_).read_text().splitlines() if "Rename" in l][0])
+        check("parse_decision: a question holding ` · ` and ` → ` keeps them (time ends at the first ` · `, the answer starts at the LAST ` → `)", rt_["q"] == "Rename a · b → c? → Yes" and rt_["a"] == "do it" and rt_["by"] == "you" and rt_["ts"].count(" ") == 1)
+        check("parse_decision: a line that is not a decision -> None", pdc_("") is None and pdc_("- just a note") is None and pdc_("- 10-27 09:15 · no arrow here") is None and pdc_("- Written 2026-10-27 09:15 · x → y") is None)
+        # pane_decisions: main memo + every session file, newest first, mtime breaks ties, last year's month last, 50 per group
+        pk_ = tempfile.mkdtemp(); tn_ = time.localtime(); today_ = time.strftime("%m-%d", tn_)
+        ly_ = f"{tn_.tm_mon % 12 + 1:02d}-15"  # next month's number: no year in the time, so it is last year's
+        HG.memo_write(pk_, {"Decisions": f"- {today_} 08:00 · by:you · note → main note\n- {ly_} 12:00 · by:you · note → last year"})
+        HG.sess_write(pk_, "pnsess_a", {"Decisions": f"- {today_} 09:00 · by:you · q-a → a-a\n- {today_} 11:00 · by:judge · judge: q-b → a-b\n- {today_} 10:30 · judge: q-old → a-old"})
+        HG.sess_write(pk_, "pnsess_b", {"Decisions": f"- {today_} 10:00 · by:you · q-c → a-c\n- {today_} 09:00 · by:you · q-tie → a-tie\n" + "x" * 5})
+        os.utime(HG.session_memo_path(pk_, "pnsess_b"), (time.time() + 100, time.time() + 100))  # newer file: wins the 09:00 tie
+        pdn_ = HG.pane_decisions(pk_)
+        check("pane_decisions: groups you / judge with n_you, n_judge; items are {ts, q, a, sid}", set(pdn_) == {"you", "judge", "n_you", "n_judge"} and pdn_["n_you"] == 5 and pdn_["n_judge"] == 2 and all(set(x) == {"ts", "q", "a", "sid"} for g in ("you", "judge") for x in pdn_[g]))
+        check("pane_decisions: newest first across the main memo and 2 session memos; a month above this one is last year; the newer file wins a tie",
+              [x["q"] for x in pdn_["you"]] == ["q-c", "q-tie", "q-a", "note", "note"] and [x["a"] for x in pdn_["you"]][-2:] == ["main note", "last year"] and [x["sid"] for x in pdn_["you"]][:3] == ["pnsess_b", "pnsess_b", "pnsess_a"] and pdn_["you"][3]["sid"] == "")
+        check("pane_decisions: an old `judge: ` line without the marker lands in judge; judge items keep the prefix", [x["q"] for x in pdn_["judge"]] == ["judge: q-b", "judge: q-old"])
+        big_ = tempfile.mkdtemp()
+        HG.sess_write(big_, "bigsess1", {"Decisions": "\n".join(f"- {today_} 10:{i % 60:02d} · by:you · {'q' * 700}{i} → {'a' * 700}" for i in range(55))})
+        pb_ = HG.pane_decisions(big_)
+        check("pane_decisions: at most 50 per group (n_you counts all 55), q and a clipped to PANE_TEXT", len(pb_["you"]) == 50 and pb_["n_you"] == 55 and all(len(x["q"]) <= HG.PANE_TEXT and len(x["a"]) <= HG.PANE_TEXT for x in pb_["you"]))
+        stx_ = {}; HG.refresh_pane(pk_, stx_, "pnsess_a", [])
+        check("pane_decisions: the payload carries `decisions` and no place key for it", stx_["pane"]["decisions"] == pdn_ and "decisions" not in stx_["pane"]["places"])
+
+        # Budget raise: Budget raise = auto (default) raises an auto budget twice per task; ask / fixed budgets deny
+        def bsess(sid_, **kw):
+            run("start", {"session_id": sid_, "cwd": cwd}, led)
+            json.dump(dict(gstate(sid_), gate=kw.get("gate", "auto"), **({"task_budget": kw["task_budget"]} if "task_budget" in kw else {})), open(Path(state, f"{sid_}.json"), "w"))
+        def bspawn(sid_, tier, bg=False):
+            pr_ = dict(agent("haiku", "low", prompt=f"abofles: Unit Test / Work · T{tier}\nq\nLine cap: 20", cwd=cwd), session_id=sid_)
+            if bg: pr_["tool_input"] = dict(pr_["tool_input"], run_in_background=True)
+            out_ = run("pre", pr_, led)
+            if allowed(out_):
+                run("post", dict(pr_, tool_response={"status": "async_launched", "agentId": f"{sid_}{time.time_ns()}", "prompt": "p", "description": "t"} if bg else good), led)
+            return out_
+        bsess("braise")
+        outs_ = [bspawn("braise", 3) for _ in range(7)]
+        check("budget raise: auto Sensitive budget 7 -> the 7 spawns run with no raise", all(allowed(o) for o in outs_) and not any("budget raised" in ctx(o) for o in outs_))
+        o8_ = bspawn("braise", 3)
+        check("budget raise: the 8th spawn is allowed and says `budget raised 7 → 11 (auto, raise 1/2)` as the hook's first line", allowed(o8_) and not reason(o8_) and ctx(o8_).startswith("abofles: budget raised 7 → 11 (auto, raise 1/2)"))
+        o9_ = [bspawn("braise", 3) for _ in range(3)]
+        o12_ = bspawn("braise", 3)
+        check("budget raise: spawns 9-11 run, the 12th raises 11 → 15 (auto, raise 2/2)", all(allowed(o) and "budget raised" not in ctx(o) for o in o9_) and allowed(o12_) and not reason(o12_) and ctx(o12_).startswith("abofles: budget raised 11 → 15 (auto, raise 2/2)"))
+        o13_ = [bspawn("braise", 3) for _ in range(3)]
+        o16_ = bspawn("braise", 3)
+        br_ = gstate("braise")["budget_raise"]
+        check("budget raise: the 16th spawn (a third raise) is denied by the unchanged budget_deny with the raised budget in it", all(allowed(o) for o in o13_) and not allowed(o16_) and "agent budget is 15 (auto" in reason(o16_) and "+8 raised" in reason(o16_) and "no Judge" in reason(o16_))
+        check("budget raise: st.budget_raise = {extra 8, n 2, log [{from, to, ts}]}", br_["extra"] == 8 and br_["n"] == 2 and [(e["from"], e["to"]) for e in br_["log"]] == [(7, 11), (11, 15)] and all(e["ts"] for e in br_["log"]))
+        bg_ = gstate("braise")["guide"]
+        check("budget raise: guide.task.raised = 2 and the guide's budget item mentions the auto raises", bg_["task"]["raised"] == 2 and any(i["id"] == "budget" and "raised 2× automatically" in i["text"] for i in bg_["items"]))
+        run("receipt", {"session_id": "braise", "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "🧾 **15 Spawns · 1 u · Saved 1%** vs Opus 5.5\n- `done` → x\n- `check` → y"}, led)
+        check("budget raise: the task end resets the raises", gstate("braise")["budget_raise"] == {"extra": 0, "n": 0, "log": []})
+        bsess("bmin")
+        om_ = [bspawn("bmin", 1) for _ in range(7)]
+        check("budget raise: the step is at least 2 (Minor 2 → 4 → 6), then denied",
+              [("budget raised" in ctx(o)) for o in om_[:6]] == [False, False, True, False, True, False] and "budget raised 2 → 4 (auto, raise 1/2)" in ctx(om_[2]) and "budget raised 4 → 6 (auto, raise 2/2)" in ctx(om_[4]) and not allowed(om_[6]) and "agent budget is 6 (auto" in reason(om_[6]))
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Budget raise = ask\n")
+        bsess("bask")
+        oa_ = [bspawn("bask", 1) for _ in range(3)]
+        check("budget raise: Budget raise = ask -> the 3rd Minor spawn is denied as today, the ask window opens, nothing raised",
+              allowed(oa_[0]) and allowed(oa_[1]) and not allowed(oa_[2]) and "agent budget is 2 (auto" in reason(oa_[2]) and gstate("bask").get("budget_ask_ts") and gstate("bask")["budget_raise"]["n"] == 0)
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Agents = 2\n")
+        bsess("bfix", gate=None)
+        of_ = [bspawn("bfix", 1) for _ in range(3)]
+        check("budget raise: an explicit Agents = N is never raised", not allowed(of_[2]) and "agent budget is 2 (Agents = 2)" in reason(of_[2]) and gstate("bfix")["budget_raise"]["n"] == 0)
+        Path(cwd, "CLAUDE.md").unlink()
+        bsess("btask", gate="task", task_budget=2)
+        ot_ = [bspawn("btask", 1) for _ in range(3)]
+        check("budget raise: a `This task: N` answer is never raised", not allowed(ot_[2]) and "agent budget is 2 (your answer for this task)" in reason(ot_[2]) and gstate("btask")["budget_raise"]["n"] == 0)
+        # caps: the Parallel cap still denies a spawn that would raise (and raises nothing), the session cap still warns after a raise
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Parallel = 1\n")
+        bsess("bcap")
+        bspawn("bcap", 1); bspawn("bcap", 1, bg=True)
+        oc_ = bspawn("bcap", 1, bg=True)
+        check("budget raise: a spawn the Parallel cap refuses raises nothing (cap denial first)", not allowed(oc_) and "background agents are already running" in reason(oc_) and gstate("bcap")["budget_raise"]["n"] == 0)
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Parallel = 1\n- Session cap = 1\n")
+        orz_ = bspawn("bcap", 1)
+        check("budget raise: ... a sync spawn then raises 2 → 4, and the Session cap warning still fires after the raise", allowed(orz_) and "budget raised 2 → 4 (auto, raise 1/2)" in ctx(orz_) and gstate("bcap")["budget_raise"]["n"] == 1)
+        pr_ = dict(agent("haiku", "low", prompt="abofles: Unit Test / Work · T1\nq\nLine cap: 20", cwd=cwd), session_id="bcap")
+        pr_["tool_input"] = dict(pr_["tool_input"], run_in_background=True)
+        check("budget raise: ... and the Parallel cap still denies a background spawn after a raise", "background agents are already running" in reason(run("pre", pr_, led)))
+        sc_ = ctx(run("post", dict(agent("haiku", "low", prompt="abofles: Unit Test / Work · T1\nq\nLine cap: 20", cwd=cwd, resp=good), session_id="bcap"), led))
+        check("budget raise: session cap passed is still warned after a raise", "session cap 1 units passed" in sc_)
+        Path(cwd, "CLAUDE.md").unlink()
+        # gate re-answer: Auto again starts a fresh count and clears the raises
+        run("decision", {"session_id": "bcap", "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Abo Fles agent gate: how many?", "options": []}]}, "tool_response": {"answers": {"Abo Fles agent gate: how many?": "Auto (recommended)"}}}, led)
+        check("budget raise: answering the gate again clears the raises", gstate("bcap")["budget_raise"] == {"extra": 0, "n": 0, "log": []})
+        # overrides.py: Budget raise is a plain select
+        ob_ = tempfile.mkdtemp()
+        rb_ = ovrun(["set", "--scope", "project", "--cwd", ob_], {"set": {"Budget raise": "maybe"}})
+        rg_ = ovrun(["set", "--scope", "project", "--cwd", ob_], {"set": {"Budget raise": "Ask"}})
+        check("overrides set: Budget raise takes auto | ask (case ignored) and refuses anything else with one line (exit 2)",
+              rb_.returncode == 2 and "Budget raise" in rb_.stderr and "auto, ask" in rb_.stderr and len(rb_.stderr.strip().splitlines()) == 1 and rg_.returncode == 0 and (Path(ob_) / "CLAUDE.md").read_text() == "## abofles overrides\n\n- Budget raise = ask\n"
+              and {k["key"]: k for k in json.loads(rg_.stdout)["keys"]}["Budget raise"] | {} == {"key": "Budget raise", "kind": "select", "options": ["auto", "ask"], "value": "ask", "source": "project", "default": "auto"})
+
+    # ---- Git agent: the Work cell for a git topic, no fable, Git guard on risky git outside abofles-git, claims.py
+    with tempfile.TemporaryDirectory() as led, tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as state:
+        os.environ["ABOFLES_STATE_DIR"] = state
+        os.environ["ABOFLES_TEST_CWD"] = cwd
+        sdir_g = Path(__file__).resolve().parent
+        gpre = lambda topic, side, model, effort, n: ctx(run("pre", dict(agent(model, effort, "abofles:abofles-git", prompt=f"abofles: {topic} / {side} · T{n}\nq\nLine cap: 20", cwd=cwd), session_id="git-" + side + str(n) + model + effort), led))
+        check("git: T2 git topic at the Work cell (sonnet·medium) -> no cell note, topic known", gpre("Tags, Releases & Changelogs", "Git", "sonnet", "medium", 2) == "")
+        o_ = gpre("Tags, Releases & Changelogs", "Git", "opus", "high", 2)
+        check("git: a `/ Git` header at T2 is judged against the Work cell (names sonnet·medium)", "sonnet·medium" in o_ and "× the cell" in o_)
+        check("git: T4 git topic at the Work cell (opus·high) -> no cell note", gpre("History Rewrite & Force Push", "Git", "opus", "high", 4) == "")
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- History Rewrite & Force Push / Work = haiku·high\n")
+        o_ = gpre("History Rewrite & Force Push", "Git", "opus", "high", 4)
+        check("git: a `Topic / Work` override is the Git agent's cell too (names haiku·high)", "haiku·high" in o_ and "× the cell" in o_)
+        Path(cwd, "CLAUDE.md").unlink()
+        check("git: fable refused for abofles-git", "fable is only for" in reason(run("pre", agent("fable", "medium", "abofles:abofles-git", prompt="abofles: Tags, Releases & Changelogs / Git · T2\nq"), led)))
+        gr = "STATUS: done\nCONFIDENCE: high\nACTIONS:\n- git tag -a v1.0.0 -m x — tag created\nSTATE: branch main · 0 ahead / 0 behind\nCONFLICTS: none\nLEFT: none"
+        o_ = run("post", dict(agent("sonnet", "medium", "abofles:abofles-git", prompt="abofles: Tags, Releases & Changelogs / Git · T2\nq\nLine cap: 20", resp=gr, cwd=cwd), session_id="gitrow"), led)
+        rows_ = [json.loads(l) for l in Path(led, "gitrow.jsonl").read_text().splitlines()]
+        check("git: a well-formed reply is graded clean and its ledger row is side Git (not a Work row, so no review gate)", warn(o_) == "" and rows_[-1]["side"] == "Git" and not [r for r in rows_ if r["side"] == "Work"])
+        o_ = ctx(run("post", dict(agent("sonnet", "medium", "abofles:abofles-git", prompt="abofles: Tags, Releases & Changelogs / Git · T2\nq", resp="STATUS: partial\nCONFIDENCE: high\nACTIONS:\n- git status — clean\nSTATE: main\nCONFLICTS: none\nLEFT: git push --force origin x — needs the user's word", cwd=cwd), session_id="gitrow2"), led))
+        check("git: a partial reply with a command left for the caller escalates like a worker's", "escalation rule applies" in o_)
+        tf_ = subprocess.run([sys.executable, str(sdir_g / "topic.py"), "find", "merge conflict"], capture_output=True, text=True, cwd=cwd).stdout
+        first_ = next((l for l in tf_.splitlines() if l.startswith("1.")), "")
+        check("topic: `merge conflict` finds Merge Conflict Resolution first, T3", "Merge Conflict Resolution" in first_ and "(T3)" in first_)
+        check("topic: `force push to main` finds History Rewrite & Force Push first", "History Rewrite & Force Push" in next((l for l in subprocess.run([sys.executable, str(sdir_g / "topic.py"), "find", "force push to main"], capture_output=True, text=True, cwd=cwd).stdout.splitlines() if l.startswith("1.")), ""))
+
+        # Git guard
+        gg = lambda cmd, atype=None, sid="gg": run("guard", dict({"session_id": sid, "cwd": cwd, "tool_name": "Bash", "tool_input": {"command": cmd}}, **({"agent_type": atype} if atype else {})), led)
+        o_ = gg("git push --force origin main")
+        check("git guard: a force push from the main session is warned, naming abofles-git", "risky git (push --force)" in ctx(o_) and "abofles:abofles-git" in ctx(o_))
+        check("git guard: warn only adds context: no permissionDecision / reason, so the user's permission prompt stays", set(o_["hookSpecificOutput"]) == {"hookEventName", "additionalContext"} and "permissionDecision" not in json.dumps(o_))
+        check("git guard: silent for abofles:abofles-git", gg("git push --force origin main", "abofles:abofles-git") is None)
+        check("git guard: another plugin's `x:abofles-git`, or a bare `abofles-git` type, is warned (only this plugin's agent is exempt)", "risky git" in ctx(gg("git reset --hard HEAD~1", "evil:abofles-git")) and "risky git" in ctx(gg("git reset --hard HEAD~1", "abofles-git")))
+        check("git guard: another agent type is warned", "risky git (reset --hard)" in ctx(gg("git reset --hard", "abofles:abofles-worker")))
+        import shlex as _shlex
+        _nest = lambda c, n: c if n == 0 else _nest("bash -c " + _shlex.quote(c), n - 1)
+        check("git guard: fails closed — git nested deeper than SHELL_DEPTH shells is flagged, not passed unread", "not read" in ctx(gg(_nest("git reset --hard", 7))) and "not read" in ctx(gg("eval " * 7 + "git reset --hard")))
+        check("git guard: 6 nested shells are still read through to the op", "risky git (reset --hard)" in ctx(gg(_nest("git reset --hard", 6))))
+        for cmd_ in ("setsid git reset --hard", "flock /tmp/l git push -f", "taskset -c 0 git reset --hard", "chrt 10 git push --force", "unbuffer git reset --hard",
+                     "strace -o x git reset --hard", "coproc git reset --hard", "f() { git reset --hard; }; f", '$"git" reset --hard', "git rm -rf src"):
+            check(f"git guard: {cmd_!r} is flagged", "risky git" in ctx(gg(cmd_)))
+        check("git guard: an alias defined from the environment (GIT_CONFIG_PARAMETERS / GIT_CONFIG_KEY_n) is flagged",
+              "via the environment" in ctx(gg("GIT_CONFIG_PARAMETERS=\"'alias.x=reset --hard'\" git x")) and "via the environment" in ctx(gg("GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0='reset --hard' GIT_CONFIG_COUNT=1 git x")))
+        check("git guard: backstop — git inside a runner it cannot read (su -c, script, python -c) is flagged as not fully parsed",
+              all("not fully parsed" in ctx(gg(c)) for c in ("su me -c 'git reset --hard'", "script -q /dev/null git reset --hard", "python3 -c \"import subprocess;subprocess.run(['git','reset','--hard'])\"")))
+        check("git guard: the backstop leaves text alone (echo, grep, a gh PR title, git rm --cached)",
+              all(gg(c) is None for c in ("grep -r 'git reset --hard' docs", "gh pr create --title 'fix git reset --hard docs'", "git rm --cached a.py", "cat .gitignore")))
+        check("git guard: a line that breaks the parser (1000 heredocs) is flagged as not fully parsed, never passed", "not fully parsed" in ctx(gg("git reset --hard " + "<<A " * 1000)))
+        for cmd_ in ("git status", "git log --oneline -n 5", "git diff -- .", "git branch -d old", "git fetch --all", 'git commit -m "reset --hard docs"', "git commit -m 'push --force and rebase'",
+                     "git rebase --continue", "git rebase --abort", "git restore --staged a.py", "git clean -n", "git stash push -m drop", 'git log --grep="reset --hard"', 'echo "git push --force"',
+                     "git commit -F - <<'EOF'\nfix\n\ngit reset --hard\nEOF"):
+            check(f"git guard: silent for {cmd_.splitlines()[0]}", gg(cmd_) is None)
+        check("git guard: `git -C x reset --hard` is caught", "risky git (reset --hard)" in ctx(gg("git -C x reset --hard")))
+        check("git guard: `cd a && git rebase main` is caught", "risky git (rebase)" in ctx(gg("cd a && git rebase main")))
+        for cmd_, op_ in (("git branch -D old", "branch -D"), ("git clean -fd", "clean -f"), ("git checkout -- src/a.cs", "checkout -- <paths>"), ("git checkout .", "checkout ."), ("git restore src/a.cs", "restore"),
+                          ("git stash drop", "stash drop"), ("git filter-repo --path x", "filter-repo"), ("git commit --amend --no-edit", "commit --amend"), ("git update-ref -d refs/x", "update-ref -d"),
+                          ("git gc --prune=now", "gc --prune=now"), ("git push origin +main", "push +main"), ("bash -c 'git reset --hard'", "reset --hard"), ("FOO=1 git push -f", "push -f")):
+            check(f"git guard: {cmd_} -> {op_}", f"risky git ({op_})" in ctx(gg(cmd_)))
+        for cmd_, op_ in (("git push --delete origin old", "push --delete"), ("git push -d origin old", "push --delete"), ("git push origin :old", "push :<ref>"), ("git push --mirror backup", "push --mirror"),
+                          ("git tag -d v1", "tag -d"), ("git tag --delete v1", "tag -d"), ("git checkout -f main", "checkout -f"), ("git checkout --force main", "checkout -f"),
+                          ("git switch -f main", "switch -f"), ("git switch --force main", "switch -f"), ("git switch --discard-changes main", "switch -f"), ("git reset --merge", "reset --merge"),
+                          ("sudo -u deploy git push -f", "push -f"), ("env -i -u HOME GIT_X=1 git reset --hard", "reset --hard"), ("nice -n 5 git push --force", "push --force"),
+                          ("echo a | xargs -n 1 -I X git tag -d X", "tag -d"), ("bash -lc 'git reset --hard'", "reset --hard"), ("sh -ec 'git push -f'", "push -f"),
+                          ("sudo bash -lc \"git push origin :old\"", "push :<ref>"), ("zsh -Lc 'git reset --merge'", "reset --merge"), ("bash -xc 'git push --mirror o'", "push --mirror")):
+            check(f"git guard: {cmd_} -> {op_}", f"risky git ({op_})" in ctx(gg(cmd_)))
+        for cmd_ in ("git push origin main", "git push -u origin feature", "git tag v1", "git tag -l", "git checkout -b x", "git switch -c x", "git switch main", "git reset --soft HEAD~1", "sudo git status", "bash -lc 'git status'"):
+            check(f"git guard: silent for {cmd_}", gg(cmd_) is None)
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Git guard = deny\n")
+        o_ = gg("git push --force")
+        check("git guard: Git guard = deny blocks it with the same text", o_["hookSpecificOutput"]["permissionDecision"] == "deny" and "risky git (push --force)" in reason(o_))
+        check("git guard: Git guard = deny still lets abofles-git and read-only git through", gg("git push --force", "abofles:abofles-git") is None and gg("git status") is None)
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Git guard = off\n")
+        check("git guard: Git guard = off is silent", gg("git push --force") is None)
+        Path(cwd, "CLAUDE.md").write_text("## abofles overrides\n- Git guard = sometimes\n")
+        check("git guard: an unknown value falls back to warn", "risky git" in ctx(gg("git push --force")))
+        Path(cwd, "CLAUDE.md").unlink()
+
+        # security review (T4): git guard forms, question gate, memo, repo root
+        for cmd_, op_ in (("g\\it reset --hard", "reset --hard"), ('gi""t reset --hard', "reset --hard"), ("GIT reset --hard", "reset --hard"),
+                          ("git branch -df x", "branch -D"), ("git branch -d -f x", "branch -D"), ("git branch --delete --force x", "branch -D"),
+                          ("if true; then git reset --hard; fi", "reset --hard"), ("while git reset --hard; do :; done", "reset --hard"), ("until git push -f; do :; done", "push -f"),
+                          ("! git reset --hard", "reset --hard"), ("timeout 5 git reset --hard", "reset --hard"), ("timeout -s KILL 5 git push -f", "push -f"),
+                          ("stdbuf -o0 git reset --hard", "reset --hard"), ("doas git reset --hard", "reset --hard"), ("caffeinate -i git reset --hard", "reset --hard"),
+                          ("eval \"git reset --hard\"", "reset --hard"), ("eval git push --force", "push --force"), ("ksh -c 'git reset --hard'", "reset --hard"),
+                          ("fish -c 'git reset --hard'", "reset --hard"), ("bash -c -- 'git reset --hard'", "reset --hard"), ("sudo --user root git reset --hard", "reset --hard"),
+                          ("env --unset X git reset --hard", "reset --hard"), ("env -S 'git reset --hard'", "reset --hard"), ("bash <<< 'git reset --hard'", "reset --hard"),
+                          ("bash <<<\"git reset --hard\"", "reset --hard"), ("echo 'git reset --hard' | sh", "reset --hard"), ("printf 'git push -f' | bash -s", "push -f"),
+                          ("bash <(echo git reset --hard)", "reset --hard"), ("bash <<'EOF'\ngit reset --hard\nEOF", "reset --hard"), ("cat <<EOF | sh\ngit reset --hard\nEOF", "reset --hard"),
+                          ("find . -name x -exec git reset --hard \;", "reset --hard"), ("git submodule foreach git reset --hard", "reset --hard"),
+                          ("git submodule foreach --recursive 'git clean -fdx'", "clean -f"), ("bash -c 'bash -c \"bash -c \\\"git reset --hard\\\"\"'", "reset --hard"),
+                          ("git -c alias.x='reset --hard' x", "reset --hard"), ("git -c alias.x='!git push -f' x", "push -f"), ("git config alias.nuke 'reset --hard'", "config alias.*"),
+                          ("git config --global alias.p 'push -f'", "config alias.*"), ("git checkout -B main origin/main", "checkout -B"), ("git switch -C main origin/main", "switch -C"),
+                          ("git branch -f main HEAD~3", "branch -f"), ("git branch -M main", "branch -M"), ("git tag -f v1", "tag -f"), ("git reset --keep HEAD~1", "reset --keep"),
+                          ("git gc --prune=all", "gc --prune=all"), ("git reflog expire --expire=now --all", "reflog expire"), ("git update-ref refs/heads/main HEAD~5", "update-ref <ref> <new>"),
+                          ("git update-ref refs/heads/main abc def", "update-ref <ref> <new>"), ("git push --prune origin", "push --prune"), ("git worktree remove -f x", "worktree remove --force"),
+                          ("git worktree remove --force x", "worktree remove --force"), ("git stash clear", "stash clear"), ("git stash -q drop", "stash drop"), ("git filter-branch --tree-filter x", "filter-branch")):
+            check(f"git guard (review): {cmd_.splitlines()[0]} -> {op_}", f"risky git ({op_})" in ctx(gg(cmd_)))
+        for cmd_ in ("git branch -d old", "git branch -m old new", "git stash push -m drop", "git stash -m drop", "git config --get alias.x", "git config alias.x", "git config user.name x",
+                     "git worktree remove x", "git update-ref -m msg", "echo 'git reset --hard' > notes.md", "echo 'git reset --hard' | grep reset", "cat <<EOF\ngit reset --hard\nEOF",
+                     "git reflog", "git reflog expire --expire=90.days", "git gc", "git tag -a v2 -m 'fix'", "timeout 5 git status", "eval git status", "bash -c -- 'git log'", "git checkout -b x"):
+            check(f"git guard (review): silent for {cmd_.splitlines()[0]}", gg(cmd_) is None)
+        import importlib.util as _iusr
+        os.environ["ABOFLES_LEDGER_DIR"] = led
+        _hsr = _iusr.spec_from_file_location("abofles_hook_sr", str(HOOK)); SR = _iusr.module_from_spec(_hsr); _hsr.loader.exec_module(SR)
+        def qsess(sid_, **kw):
+            run("start", {"session_id": sid_, "cwd": cwd}, led)
+            json.dump(dict(json.loads(Path(state, f"{sid_}.json").read_text()), gate="auto", **kw), open(Path(state, f"{sid_}.json"), "w"))
+        qbox = lambda sid_, *qs_, opts=(): {"session_id": sid_, "cwd": cwd, "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": q_, "options": [{"label": o_} for o_ in opts]} for q_ in qs_]}}
+        now_ = int(time.time())
+        qsess("sr1", judge_ok=1, judge_ok_ts=now_, gate_wait_ts=0, task_started=now_ - 10)
+        o_ = run("qgate", qbox("sr1", "Should the cap apply per unit or per order?", "Should refunds go to the wallet or the card?"), led)
+        check("qgate (review): one unlock does not carry a box of two questions (ok >= len(questions)), and the deny says why", "question gate" in reason(o_) and "covers 1 question" in reason(o_))
+        json.dump(dict(json.loads(Path(state, "sr1.json").read_text()), judge_ok=2), open(Path(state, "sr1.json"), "w"))
+        check("qgate (review): ... two unlocks do", run("qgate", qbox("sr1", "Should the cap apply per unit or per order?", "Should refunds go to the wallet or the card?"), led) is None)
+        qsess("sr2", budget_ask_ts=now_, task_started=now_ - 10)
+        check("qgate (review): a budget-mark question that carries another ask needs a Judge", "question gate" in reason(run("qgate", qbox("sr2", "Abo Fles agent budget — also may I deploy to prod?"), led)))
+        check("qgate (review): ... so does one whose option carries it", "question gate" in reason(run("qgate", qbox("sr2", "Abo Fles agent budget: raise it to 6?", opts=("Raise to 6", "Raise and deploy to prod")), led)))
+        check("qgate (review): ... the plain budget question (budget words, numbers) still goes straight through", run("qgate", qbox("sr2", "Abo Fles agent budget: this task hit 5 agents. Raise it to 8, or finish in the main session?", opts=("Raise to 8", "Finish in main session")), led) is None)
+        stx_ = {"task_started": now_ - 10}
+        SR.apply_gate_reply(stx_, "VERDICT: ASK\n" + "".join(f"QUESTION {i}: Question number {i} here?\n" for i in range(1, 21)) + "EXPLAIN: x", "explainer")
+        check("gate reply (review): an explainer reply with 20 QUESTION lines unlocks 3 at most", stx_.get("judge_ok") == 3)
+        stx_ = {"task_started": now_ - 10}
+        SR.apply_gate_reply(stx_, "VERDICT: HANDOFF\nQUESTION: one?\nEVIDENCE:\n- a — b\nWHY: w", "judge", tier=3)
+        SR.apply_gate_reply(stx_, "QUESTION 1: one?\nQUESTION 2: two?\nQUESTION 3: three?\nEXPLAIN: x", "explainer")
+        check("gate reply (review): ... and no more than the questions the Judge passed on (1 HANDOFF -> 1)", stx_.get("judge_ok") == 1)
+        stx_ = {"task_started": now_ - 10}
+        SR.apply_gate_reply(stx_, "VERDICT: ASK\nQUESTION: a?\nVERDICT: ASK\nQUESTION: b?\n", "judge")
+        check("gate reply (review): a judge reply with two ASK blocks unlocks two (one box may carry both)", stx_.get("judge_ok") == 2)
+        check("similar (review): both ways — an old question plus a new ask is no re-ask; a rewording is",
+              not SR.similar("Keep feature flag X on for beta users and also delete the database?", "Keep feature flag X on for beta users?", 0.75, both=True)
+              and SR.similar("Keep the feature flag X on for the beta users?", "Keep feature flag X on for beta users?", 0.75, both=True))
+        nop_ = [{"label": "No"}, {"label": "Yes"}]
+        check("picked_option (review): a label must be whole or followed by a separator — 'Nothing yet…', 'Not sure…', 'Yesterday…' are free text",
+              not any(SR.picked_option(a_, nop_) for a_ in ("Nothing yet, ask me tomorrow", "Not sure — explain more first", "Yesterday's build broke"))
+              and all(SR.picked_option(a_, nop_) for a_ in ("No", "no.", "Yes, but only staging", "Yes — staging", "Yes (staging)", "No: later")))
+        with tempfile.TemporaryDirectory() as mproj:
+            SR.memo_needs(mproj, "BBBBBBBB-2", "ATTENTION: auth bypass in login.ts (s:AAAAAAAA p:" + SR.proj_tag(mproj) + ") needs fix")
+            SR.memo_needs(mproj, "BBBBBBBB-2", "VERDICT FAIL payment refund double charge in billing.py")
+            ln_ = [l for l in SR.memo_read(mproj)["Needs you"].splitlines() if "[ ]" in l]
+            check("need_tag_of (review): the tail tag only — a tag-like text inside the item is not its origin", [SR.need_tag_of(l)[0] for l in ln_] == ["BBBBBBBB", "BBBBBBBB"]
+                  and SR.need_split(ln_, "AAAAAAAA-1", mproj)[0] == [])
+            n_ = SR.memo_resolve_matching(mproj, "Payment refund double charge billing.py: continue later?", "No", nop_, "AAAAAAAA-1")
+            check("memo_resolve_matching (review): another session's item is never settled by this session's question", n_ == 0 and all("[ ]" in l for l in SR.memo_read(mproj)["Needs you"].splitlines()))
+            n_ = SR.memo_resolve_matching(mproj, "Payment refund double charge billing.py: continue later?", "No", nop_, "BBBBBBBB-2")
+            check("memo_resolve_matching (review): ... its own session's item is", n_ == 1)
+            SR.memo_needs(mproj, "AbCdEf12-x", "owner decision: keep the wide banner")
+            k_ = next(l for l in SR.memo_read(mproj)["Needs you"].splitlines() if "wide banner" in l).split(".")[0]
+            r_ = subprocess.run([sys.executable, str(HOOK.parent.parent / "scripts" / "memo.py"), "resolve", k_, "user said keep it", "--trace", "--session", "AbCdEf12-x"], capture_output=True, text=True, cwd=mproj)
+            jr_ = SR.session_memo_path(mproj, "AbCdEf12-x").read_text() if SR.session_memo_path(mproj, "AbCdEf12-x").exists() else ""
+            check("memo.py resolve (review): the trace strips an upper-case session tag too (one tag pattern with the hook)", r_.returncode == 0 and "keep the wide banner" in jr_ and "(s:AbCdEf12" not in jr_)
+        with tempfile.TemporaryDirectory() as rt_:
+            Path(rt_, "victim").mkdir(); Path(rt_, "evil", "sub").mkdir(parents=True)
+            Path(rt_, "evil", ".git").write_text(f"gitdir: {Path(rt_, 'victim', '.git', 'worktrees', 'x')}\n")
+            check("repo_top (review): a `.git` file pointing at a folder with no real repository counts as its own folder", SR.repo_top(str(Path(rt_, "evil", "sub"))) == os.path.realpath(Path(rt_, "evil")))
+            Path(rt_, "victim", ".git", "worktrees", "x").mkdir(parents=True); Path(rt_, "victim", ".git", "HEAD").write_text("ref: refs/heads/main\n")
+            check("repo_top (review): ... one pointing into a real repository's worktrees with no back-pointer still counts as its own folder", SR.repo_top(str(Path(rt_, "evil", "sub"))) == os.path.realpath(Path(rt_, "evil")))
+            Path(rt_, "victim", ".git", "worktrees", "x", "gitdir").write_text(str(Path(rt_, "evil", ".git")) + "\n")
+            check("repo_top (review): ... a real worktree (its gitdir file points back at this `.git`) maps to the main repository", SR.repo_top(str(Path(rt_, "evil", "sub"))) == os.path.realpath(Path(rt_, "victim")))
+        # the Stop hook's receipt demand waits while a spawn of the task runs
+        rr_ = lambda sid_: run("receipt", {"session_id": sid_, "cwd": cwd, "stop_hook_active": False, "last_assistant_message": "all done"}, led)
+        for sid_, kw_ in (("rw1", {}), ("rw2", {"inflight_bg": 1}), ("rw3", {"running_bg": 1})):
+            run("start", {"session_id": sid_, "cwd": cwd}, led)
+            json.dump(dict(json.loads(Path(state, f"{sid_}.json").read_text()), gate="auto", spawns=8, spawns_since_receipt=8, **kw_), open(Path(state, f"{sid_}.json"), "w"))
+        Path(led, "rw1.jsonl").write_text(json.dumps({"ts": int(time.time()), "session": "rw1", "agent_id": "bgw1", "status": "pending", "agent": "abofles:abofles-worker", "side": "Work"}) + "\n")
+        check("receipt (review): no receipt demand while a background spawn of the task is pending", "no receipt" not in json.dumps(rr_("rw1") or {}))
+        check("receipt (review): ... nor while a background launch is still in flight (inflight_bg)", "no receipt" not in json.dumps(rr_("rw2") or {}))
+        o_ = json.dumps(rr_("rw3") or {}, ensure_ascii=False)
+        check("receipt (review): with nothing running the demand comes, and its header claims no stale `· 1 running`", "no receipt" in o_ and "1 running" not in o_)
+        os.environ.pop("ABOFLES_LEDGER_DIR", None)
+
+    with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as wt_parent:
+        claims = str(Path(__file__).resolve().parent / "claims.py")
+        cl = lambda *a, cwd=repo: subprocess.run([sys.executable, claims, *a], capture_output=True, text=True, cwd=cwd)
+        genv = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        subprocess.run(["git", "init", "-q", repo], check=True, env=genv)
+        subprocess.run(["git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "x"], check=True, env=genv)
+        check("claims: list with no claim says so", cl("list").stdout.strip() == "no claims")
+        _lk = Path(repo, ".git", "abofles-claims.lock"); _victim = Path(repo, "victim.txt"); _victim.write_text("keep")
+        if hasattr(os, "O_NOFOLLOW") and not _lk.exists():
+            _lk.symlink_to(_victim)
+            cl("list")
+            check("claims: a planted lock symlink is never followed or truncated", _victim.read_text() == "keep")
+            _lk.unlink()
+        cl("claim", "--session", "s0\u2028x\u200b\u061c\ufeff", "--branch", "z")
+        _o = cl("list").stdout
+        check("claims: line/paragraph separators, zero-width and ALM marks are stripped on output", not any(ch in _o for ch in "\u2028\u2029\u200b\u200c\u200d\u061c\ufeff"))
+        cl("release", "--session", "s0\u2028x\u200b\u061c\ufeff")
+        r_ = cl("claim", "--session", "s1", "--branch", "feat/a", "--files", "src/a.cs", "docs/")
+        check("claims: claim records it (exit 0) in the repository's .git, outside the work tree", r_.returncode == 0 and Path(repo, ".git", "abofles-claims.json").exists() and not (Path(repo, "abofles-claims.json")).exists())
+        l_ = cl("list").stdout
+        check("claims: list prints one line per claim with branch and files, no overlap", len(l_.strip().splitlines()) == 1 and "s1" in l_ and "feat/a" in l_ and "src/a.cs" in l_ and "overlap" not in l_)
+        r_ = cl("claim", "--session", "s2", "--branch", "feat/b", "--files", "src/a.cs")
+        l_ = cl("list").stdout
+        check("claims: two sessions on one file -> claim exit 3, both lines flag the file", r_.returncode == 3 and "overlap" in r_.stdout and all("overlap: file src/a.cs with" in x for x in l_.strip().splitlines()) and len(l_.strip().splitlines()) == 2)
+        cl("claim", "--session", "s3", "--branch", "feat/b")
+        l_ = cl("list").stdout
+        check("claims: two sessions on one branch are flagged", any(x.startswith("s3") and "overlap: branch feat/b with s2" in x for x in l_.splitlines()))
+        cl("claim", "--session", "s4", "--branch", "feat/d", "--files", "docs/guide.md")
+        check("claims: a folder claims what is under it", any(x.startswith("s4") and "overlap: file docs/guide.md with s1" in x for x in cl("list").stdout.splitlines()))
+        cl("claim", "--session", "s5", "--branch", "feat/e", "--files", "src")
+        check("claims: a folder claim `src` clashes with `src/a.cs` both ways, equal paths clash, `src2/x` does not",
+              any(x.startswith("s5") and "file src with s1" in x for x in cl("list").stdout.splitlines()) and any(x.startswith("s1") and "file src/a.cs with s5" in x for x in cl("list").stdout.splitlines())
+              and "file src with" in cl("list").stdout)
+        cl("claim", "--session", "s6", "--branch", "feat/f", "--files", "src2/x")
+        check("claims: `src` does not clash with `src2/x`", not any(x.startswith("s6") and "overlap" in x for x in cl("list").stdout.splitlines()))
+        cl("release", "--session", "s5"); cl("release", "--session", "s6")
+        wt = str(Path(wt_parent, "wt"))
+        subprocess.run(["git", "-C", repo, "worktree", "add", "-q", "-b", "feat/wt", wt], check=True, env=genv)
+        check("claims: a worktree shares the same store", "s1" in cl("list", cwd=wt).stdout)
+        check("claims: release drops the claim, a second release says so (exit 1)", cl("release", "--session", "s2").returncode == 0 and "s2 " not in cl("list").stdout and cl("release", "--session", "s2").returncode == 1)
+        store = Path(repo, ".git", "abofles-claims.json")
+        data_ = json.loads(store.read_text())
+        for c_ in data_["claims"]:
+            if c_["session"] == "s1":
+                c_["beat"] = int(time.time()) - 3 * 3600
+            if c_["session"] == "s3":
+                c_["beat"] = int(time.time() - 1.9 * 3600)
+        store.write_text(json.dumps(data_))
+        l_ = cl("list").stdout
+        check("claims: a claim without a heartbeat for 3 h drops out, one at 1.9 h stays", not any(x.startswith("s1 ") for x in l_.splitlines()) and any(x.startswith("s3 ") for x in l_.splitlines()))
+        check("claims: heartbeat on a dropped claim says so (exit 1)", cl("heartbeat", "--session", "s1").returncode == 1)
+        check("claims: heartbeat refreshes a live claim", cl("heartbeat", "--session", "s3").returncode == 0 and any(x.startswith("s3 ") and "beat 0m ago" in x for x in cl("list").stdout.splitlines()))
+        check("claims: a claim needs --session and --branch (exit 2)", cl("claim", "--branch", "x").returncode == 2 and cl("claim", "--session", "s9").returncode == 2)
+        store.write_text("{not json")
+        r_ = cl("list")
+        bak_ = Path(repo, ".git", "abofles-claims.json.bak")
+        check("claims: a damaged store is backed up to .bak, warned once on stderr, and read as no claims", r_.returncode == 0 and "no claims" in r_.stdout and r_.stderr.count("damaged") == 1 and bak_.read_text() == "{not json")
+        store.write_text(json.dumps({"claims": [{"session": "s5", "branch": "b\x1b[31m\nx", "files": ["a\x07.cs"], "beat": "oops"}, {"session": "s6\x1b[2J", "branch": "ok", "beat": str(int(time.time()))}]}))
+        l_ = cl("list").stdout
+        check("claims: a bad beat value is stale; control characters are stripped when printing", "s5" not in l_ and "s6[2J" in l_ and "\x1b" not in l_ and cl("list").returncode == 0)
+        store.write_text(json.dumps({"claims": [{"session": "s7", "branch": "b\x1b[31m\nx", "files": ["a\x07.cs"], "beat": int(time.time())}]}))
+        l_ = cl("list").stdout
+        check("claims: control characters in branch and file are stripped", "\x1b" not in l_ and "\x07" not in l_ and "b[31mx" in l_ and "a.cs" in l_ and len(l_.strip().splitlines()) == 1)
+        store.write_text(json.dumps({"claims": [{"session": "s8\u202e", "branch": "b\x9b31m\u2066x\u200f", "files": ["a\x85.cs"], "beat": int(time.time())}]}))
+        l_ = cl("list").stdout
+        check("claims (review): C1 controls and bidi marks are stripped when printing", not re.search("[\x80-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]", l_) and "s8 " in l_ and "b31mx" in l_ and "a.cs" in l_)
+        r_ = subprocess.run([sys.executable.encode(), claims.encode(), b"claim", b"--session", b"s9", b"--branch", b"b\xff"], capture_output=True, cwd=repo)
+        check("claims (review): a non-UTF-8 argument exits 2, leaves no .tmp and does not touch the store", r_.returncode == 2 and not list(Path(repo, ".git").glob("abofles-claims.json.*.tmp")) and "s9" not in store.read_text())
+        bak_.unlink(); victim_ = Path(wt_parent, "victim.txt"); victim_.write_text("keep"); os.symlink(victim_, bak_)
+        store.write_text("{damaged again")
+        cl("list")
+        check("claims (review): the .bak copy never writes through a planted symlink", victim_.read_text() == "keep" and not bak_.is_symlink() and bak_.read_text() == "{damaged again")
+        store.write_text("")
+        r_ = cl("list")
+        check("claims: an empty store is no claims, no warning", "no claims" in r_.stdout and not r_.stderr)
+        with tempfile.TemporaryDirectory() as nogit:
+            check("claims: outside a git repository -> exit 2", cl("list", cwd=nogit).returncode == 2)
 
     print(f"\n{'ALL PASS' if not fails else f'{fails} FAILED'}")
     sys.exit(1 if fails else 0)

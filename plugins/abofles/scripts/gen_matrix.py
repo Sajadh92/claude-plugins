@@ -69,6 +69,12 @@ REVIEWERS = {
     "data": ("Data", "📊", "abofles-data", "pipeline idempotency and backfills, metric definitions, aggregation correctness, double counting, freshness, data contracts", "read + run read-only queries"),
 }
 
+# Specialists of the Work cell: not reviewers (no post-Verify step, no review gate), spawned instead of the generic worker for their kind of
+# work. Cell = the topic's Work cell. key -> (side word, emoji, agent, owns, tools)
+SPECIALISTS = {
+    "git": ("Git", "🌿", "abofles-git", "every git and gh write: branches and worktrees, commits, merges and rebases, conflicts, PRs, tags and releases; claims for multi-session work", "read + git/gh via Bash, edit (conflicts)"),
+}
+
 # Reviewers per domain and tier come from topics_data.DOMAINS (T1/T2: the generic verifier only). The first one is the
 # domain's primary reviewer. A topic adds its own with `| +reviewer` on its line.
 GROUP_REVIEWERS = {code: {3: list(rev.get(3, [])), 4: list(rev.get(4, []))} for code, _, _, rev, _ in DOMAINS}
@@ -348,6 +354,17 @@ def build_workflow_md():
     m += [
         "",
         "Route line of a reviewer: `<emoji> `<Tag>` → **<Topic>** · <Model> · <Effort> · Cap <N> · <Tier>` (the Verify cell). Prompt header: `abofles: <Topic> / <Tag> · T<tier>`. Reply format: the verifier's (STATUS, CONFIDENCE, VERDICT, EVIDENCE, ISSUES, NOTE).",
+        "",
+        "## Work specialists",
+        "",
+        "| Specialist | Route tag | Agent | Owns | Tools |",
+        "|---|---|---|---|---|",
+    ]
+    for k, (word, emoji, agent, owns, tools) in SPECIALISTS.items():
+        m.append(f"| {emoji} {word} | `{word}` | `abofles:{agent}` | {owns} | {tools} |")
+    m += [
+        "",
+        "A specialist takes the topic's **Work** cell at its tier. Route line: `<emoji> `<Tag>` → **<Topic>** · <Model> · <Effort> · Cap <N> · <Tier>`. Prompt header: `abofles: <Topic> / Git · T<tier>` (`/ Work` with `abofles:abofles-git` is the same cell). Reply format: STATUS, CONFIDENCE, ACTIONS, STATE, CONFLICTS, LEFT. It is not a reviewer: it never trips the review gate, and Fable is refused for it.",
         "",
         "## Reviewers per domain",
         "",

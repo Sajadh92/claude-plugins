@@ -266,7 +266,7 @@ def main():
         if by_model.get(m):
             print(f"  {label(m):<11}{bar(by_model[m], 24, mx)} {by_model[m]}")
     print()
-    print("Sides:      " + "  ".join(f"{s} {by_side[s]}" for s in ("Read", "Analyse", "Plan", "Work", "Verify", "Judge", "Explain") if by_side.get(s)))
+    print("Sides:      " + "  ".join(f"{s} {by_side[s]}" for s in ("Read", "Analyse", "Plan", "Work", "Git", "Verify", "Judge", "Explain") if by_side.get(s)))
     print("Confidence: " + "  ".join(f"{c} {n}" for c, n in conf.most_common()))
     pend = sum(1 for r in rows if r.get("status") == "pending")
     if pend:

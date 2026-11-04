@@ -16,7 +16,7 @@
     memo.py receipt < text       record the task's receipt (Receipt place = pane): the Stop hook reads it as if it were printed,
                                  so the memo and the Abo Fles pane get it and the chat does not; exit 2 when stdin is no receipt
     memo.py path                 print the main memo path (`path mine`: this session's file)
-    memo.py move <root>          move this session's memo (its file, its Needs-you items, its index line) to project <root>
+    memo.py move <root>          move this session's memo (its file, its Needs-you items, its index line) to project <root> (a repository top)
                                  and make <root> the session's project — for a session that was started in the wrong folder
       a write (resolve, reopen, note, now) from a folder with no session state, no --session and no memo exits 4 and writes nothing
 
@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from abofles_hook import memo_path, session_memo_path, sess_read, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg, resume_scope, config_read, config_write, SCOPES, CONFIG_PATH, memo_move, load_state, save_state, state_lock, refresh_guide, guide_line, last_resolved_note, script_cmd, clip, has_receipt, looks_like_receipt  # noqa: E402
+from abofles_hook import memo_path, session_memo_path, sess_read, memo_now, memo_resolve, memo_decision, memo_reopen, memo_trace, memo_read, resume_block, newest_state, newest_state_path, session_arg, resume_scope, config_read, config_write, SCOPES, CONFIG_PATH, memo_move, load_state, save_state, state_lock, refresh_guide, guide_line, last_resolved_note, script_cmd, clip, has_receipt, looks_like_receipt, repo_top, NEED_TAIL_RE  # noqa: E402
 
 NO_EVIDENCE = 'abofles: resolve needs evidence — add a note, e.g. --trace "re-checked: <evidence>" or "user answered: <answer>"'
 
@@ -84,8 +84,8 @@ def main():
         print(("saved as the default · " if want else "") + f"scope: {sc} (from {where})")
     elif cmd == "move":
         dest = os.path.realpath(args[1]) if len(args) > 1 and args[1].strip() else ""
-        if not dest or not os.path.isdir(dest):
-            print("usage: memo.py move <existing project folder>")
+        if not dest or not os.path.isdir(dest) or repo_top(dest) != dest:  # a project is a repository's top folder, never any folder (`move /`)
+            print("usage: memo.py move <project folder: the top of a git repository>")
             sys.exit(2)
         if not sid or not st:
             print("abofles: no session state for this folder — nothing moved")
@@ -96,6 +96,7 @@ def main():
         memo_move(cwd, dest, sid, "moved by hand (memo.py move)")
         with state_lock(sid):
             st2 = load_state(sid)
+            st2["project_pinned"] = dest  # a hand move sticks: edit() never moves the memo off it, a startup/clear of this session keeps it
             if dest == os.path.realpath(st2.get("root") or ""):
                 st2.pop("project", None)
             else:
@@ -159,7 +160,7 @@ def main():
             print(f"abofles: no {'resolved' if undo else 'open'} item {n} in Needs you ({memo_path(cwd)})")
             sys.exit(1)
         print(f"{'reopened' if undo else 'resolved'}: {hit}")
-        item = re.sub(r"\s*\(s:[0-9a-z-]{1,12}\)\s*$", "", re.sub(r"^\d+\. \[.\] \S+ \S+ · (owner decision:\s*)?", "", hit))
+        item = NEED_TAIL_RE.sub("", re.sub(r"^\d+\. \[.\] \S+ \S+ · (owner decision:\s*)?", "", hit.split(" → resolved")[0]))  # the hook's own tag pattern
         note = "" if undo else " ".join(rest[1:]).strip()
         if "--trace" in args:
             memo_trace(cwd, sid, f"{'reopened' if undo else 'resolved'} by hand: owner decision {n}: " + (clip(item, 70) + f" · {note}" if note else item))  # the note is the evidence: it must survive the Journal clip
