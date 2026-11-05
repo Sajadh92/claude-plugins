@@ -10,7 +10,7 @@ A Claude Code plugin marketplace.
 ## Install
 
 ```
-/plugin marketplace add Sajadh92/claude-plugins
+/plugin marketplace add Sajadh92/abofles
 /plugin install abofles@sajadh92
 /plugin install abofles-guide@sajadh92   # optional: the Abo Fles pane and the guide band
 ```

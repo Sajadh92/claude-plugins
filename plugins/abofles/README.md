@@ -51,14 +51,14 @@ The ledger is written to `~/.abofles/ledgers/<session>.jsonl` (`ABOFLES_LEDGER_D
 In Claude Code:
 
 ```
-/plugin marketplace add Sajadh92/claude-plugins
+/plugin marketplace add Sajadh92/abofles
 /plugin install abofles@sajadh92
 ```
 
 Or from a local clone:
 
 ```
-claude plugin marketplace add /path/to/claude-plugins
+claude plugin marketplace add /path/to/abofles
 claude plugin install abofles@sajadh92
 ```
 
