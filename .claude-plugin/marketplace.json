@@ -15,7 +15,7 @@
       "name": "abofles-guide",
       "source": "./plugins/abofles-guide",
       "description": "Abo Fles guide band: the 🧭 next line (what to do now, by priority) above the prompt box. Companion of abofles.",
-      "version": "0.6.0"
+      "version": "0.6.1"
     }
   ]
 }

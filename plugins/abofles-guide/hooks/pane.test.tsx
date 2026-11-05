@@ -1329,6 +1329,7 @@ test('desktop: each section is a header strip (icon tile, title, summary) over i
   const term = await mountPane($, 'terminal')
   expect((await term.findAll({ type: 'Svg' })).length).toBe(0)
   expect(await said(term, /^Guide$/)).toBe(true)
+  expect(await said(term, /^Abo Fles · ابو فليس$/)).toBe(true) // the brand line as dim text, no picture
   await term.unmount()
 })
 
@@ -1370,6 +1371,15 @@ test('desktop: a nav bar of icons shows one page at a time: each page its header
   const page = (await ui.findAll({ type: 'Svg' })).map((x: any) => String(x.props.alt))
   expect(page.some(a => a.startsWith('History'))).toBe(true)
   expect(page.some(a => a.startsWith('At a glance'))).toBe(false) // one page at a time
-  expect((await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.width !== 36).every((x: any) => /class="root enter"/.test(x.props.source))).toBe(true) // the page's cards slide in; the nav bar stays still
+  const moved = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.width !== 36 && !String(x.props.alt).startsWith('Abo Fles'))
+  expect(moved.every((x: any) => /class="root enter"/.test(x.props.source))).toBe(true) // the page's cards slide in; the nav bar and the brand footer stay still
+  // the brand footer closes every page: the mascot inlined, the English and Arabic name, no card around it, drawn still
+  const foot = (await ui.findAll({ type: 'Svg' })).filter((x: any) => String(x.props.alt) === 'Abo Fles · ابو فليس')
+  expect(foot.length).toBe(1)
+  expect(foot[0].props.source).toContain('class="foot"')
+  expect(foot[0].props.source).toContain('src="data:image/png;base64,')
+  expect(foot[0].props.source).toContain('ابو فليس')
+  expect(foot[0].props.source).not.toContain('class="card"')
+  expect(foot[0].props.source).not.toContain('root enter')
   await ui.unmount()
 })

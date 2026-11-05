@@ -13,6 +13,8 @@
 // Plain data in, markup and height out, with no engine import: a card can be drawn and checked outside the engine. pane.tsx gives
 // each block to an `Svg` (svgOf) and keeps the actions as native Buttons under it.
 
+import { MASCOT_PNG } from './mascot'
+
 // The tones, by name: the dark-theme values. Text in a tone is mixed half and half with the theme's text colour, so it keeps >= 4.5:1
 // on both themes (amber and green are the closest, 4.8:1 on white); a fill or a dot uses the tone as it is.
 export const TONE = {
@@ -105,6 +107,9 @@ const CSS = [
   // a page's cards slide in when the person moves to it (a short ease-out, one after another); none for reduced motion
   '.enter{animation:enter .26s cubic-bezier(.2,.8,.2,1) both}@keyframes enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}',
   '@media (prefers-reduced-motion:reduce){.enter{animation:none}}',
+  // the brand line at the foot of a page: no card, no rule (space sets it apart), muted text, the mascot in full colour
+  `.foot{display:flex;align-items:center;justify-content:center;gap:6px;height:${LINE + 8}px;font-size:12px;line-height:${CAP}px;white-space:nowrap}`,
+  '.foot img{flex:none;display:block;width:24px;height:24px}.foot .nm{opacity:.62}.foot .ar{font-size:13px}.foot .sep{opacity:.4}', // Arabic reads smaller at the same px
   tones,
 ].join('')
 
@@ -588,4 +593,19 @@ export function homeBlocks(h: HomeIn): { next: Block; more: boolean; glance: Blo
   const rcpt = h.receipt ? stack([capRow('Last receipt', h.receipt.time), fit(h.receipt.text, room, 2)], 4) : null
   const latest = dec || rcpt ? cardOf([dec, rcpt]) : null
   return { next: g.block, more: g.more, glance, where, latest }
+}
+
+// ---- Brand
+
+// The foot of every desktop page: the mascot, then the name in English and Arabic, small and muted so it never competes with the
+// cards above it. The mascot is inlined (MASCOT_PNG): a picture drawn as an <img> loads no outside file.
+export const BRAND_EN = 'Abo Fles'
+export const BRAND_AR = 'ابو فليس'
+export function brandFooter(): Block {
+  return {
+    html:
+      `<div class="foot"><img src="${MASCOT_PNG}" width="24" height="24" alt=""/>` +
+      `<span class="nm b">${esc(BRAND_EN)}</span><span class="sep">·</span><span class="nm b ar" dir="rtl" lang="ar">${esc(BRAND_AR)}</span></div>`,
+    h: LINE + 8,
+  }
 }

@@ -2,6 +2,10 @@
 
 All notable changes to the plugins in this marketplace.
 
+## abofles-guide 0.6.1 — 2026-11-05
+
+- abofles-guide: **brand footer.** Every desktop page of the pane ends with one quiet row: the Abo Fles mascot (a 64 px PNG inlined in `hooks/mascot.ts`, with a light sticker border so it reads on the dark theme), then "Abo Fles · ابو فليس" in small muted text. There is no card or rule around it (space sets it apart), and it stays still while a page's cards slide in. The terminal pane ends with the same name as dim text under a rule.
+
 ## abofles 2.3.0 · abofles-guide 0.6.0 — 2026-11-04
 
 - abofles: **security fixes.** No hook returns `permissionDecision: allow` any more except the question box that carries an explanation (it needs `updatedInput`): a spawn note is context only, so your permission prompt always stays. The Git guard also catches `push --delete` / `-d` / `:<ref>` / `--mirror`, `tag -d`, `checkout -f`, `switch -f` / `--discard-changes` and `reset --merge`, and sees through `sudo -u`, `env -i -u`, `nice -n`, `xargs -n -I` and shells with combined flags (`bash -lc`, `sh -ec`). The question gate's quick re-ask passes only for the exact question set it just refused; the no-Judge pass after a budget deny needs the words `Abo Fles agent budget`; the agent-gate question passes only while the gate is unanswered (or reset with `/abofles:agents ask`). A spawn made inside a subagent no longer changes the main session's unlocks or budget counts. `claims.py` backs a damaged store up to `.bak` with one warning, treats a bad heartbeat as stale and strips control characters when printing. `/abofles:status` lists the Git side.

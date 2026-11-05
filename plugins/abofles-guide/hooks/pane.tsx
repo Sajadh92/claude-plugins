@@ -2,7 +2,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { Guide, GuideItem, Pane, PaneDecision, PaneLive, PaneRow, PaneSpawns } from '../types'
 import { overridesCard, overridesPage } from './editor'
-import { decisionCards, guideBlock, homeBlocks, receiptCard, resumeBlocks, spawnsBlocks, subhead, toneOf } from './html'
+import { BRAND_AR, BRAND_EN, brandFooter, decisionCards, guideBlock, homeBlocks, receiptCard, resumeBlocks, spawnsBlocks, subhead, toneOf } from './html'
 import type { Block, CardItem, DecisionRow, Fact, Receipt, SpawnRow, Tone } from './html'
 import {
   ACCENT,
@@ -926,6 +926,18 @@ function homeHtml($: EngineInterface, ui: Ui, p: { resume: Pane['resume']; spawn
 
 // ---- the pane
 
+// The brand line under the last section: on the desktop a muted picture row (the mascot, the English and Arabic name); in the
+// terminal the name alone, dim and centred.
+function brandFoot(ui: Ui, look: Look) {
+  if (hasSvg(ui, look)) return pic(ui, look, brandFooter(), [`${BRAND_EN} · ${BRAND_AR}`])
+  const { Box, Text } = ui
+  return (
+    <Box flexDirection="row" justifyContent="center">
+      <Text dimColor>{`${BRAND_EN} · ${BRAND_AR}`}</Text>
+    </Box>
+  )
+}
+
 export async function renderPane($: EngineInterface, e: RenderEvent) {
   const ui = $.ui.resolve(e)
   const p = await getPane($)
@@ -980,6 +992,7 @@ export async function renderPane($: EngineInterface, e: RenderEvent) {
       <Box flexDirection="column" rowGap="lg">
         {navBar($, ui, look, tab, tabs)}
         {page}
+        {brandFoot(ui, look)}
       </Box>
     )
   }
@@ -990,5 +1003,6 @@ export async function renderPane($: EngineInterface, e: RenderEvent) {
   if (p?.decisions) cards.push(decisionsCard($, ui, p.decisions, folds, look))
   if (p?.places.spawns === 'pane') cards.push(spawnsCard($, ui, p.spawns, folds, look, p.ts, await $.clock.now())) // the engine's clock: Today / Yesterday
   cards.push(await overridesCard($, ui, p, folds, look))
+  cards.push(brandFoot(ui, look))
   return sections(ui, look, cards)
 }
